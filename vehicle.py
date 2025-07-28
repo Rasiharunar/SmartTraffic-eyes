@@ -11,7 +11,7 @@ import time
 # --- PENGATURAN SIMPLE ---
 CAPTURE_REGION = {"left": 100, "top": 100, "width": 640, "height": 480}
 VEHICLE_CLASSES = ['motorcycle', 'truck', 'car', 'bus']
-CONFIDENCE_THRESHOLD = 0.1
+CONFIDENCE_THRESHOLD = 0.05
 MODEL_PATH = 'yolo-Weights/yolo11n.pt'
 
 class SimpleVehicleCounter:
