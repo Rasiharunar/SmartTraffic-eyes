@@ -4,20 +4,21 @@ from PIL import ImageGrab
 from ultralytics import YOLO
 import tkinter as tk
 from tkinter import messagebox, Label, Button, Canvas, Frame
+from tkinter import ttk  # Untuk combobox/dropdown
 from PIL import Image, ImageTk
 import time
 
 # --- PENGATURAN SIMPLE ---
 CAPTURE_REGION = {"left": 100, "top": 100, "width": 640, "height": 480}
-VEHICLE_CLASSES = ['car', 'truck', 'motorcycle', 'motorbike', 'bus']
+VEHICLE_CLASSES = ['motorcycle', 'truck', 'car', 'bus']
 CONFIDENCE_THRESHOLD = 0.1
 MODEL_PATH = 'yolo-Weights/yolo11n.pt'
 
 class SimpleVehicleCounter:
     def __init__(self, root):
         self.root = root
-        self.root.title("Simple Vehicle Counter")
-        self.root.geometry("850x600")
+        self.root.title("Simple Vehicle Counter with Filter")
+        self.root.geometry("900x650")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Load YOLO model
@@ -34,6 +35,9 @@ class SimpleVehicleCounter:
         self.last_fps_time = time.time()
         self.fps_counter = 0
         self.current_fps = 0
+        
+        # Filter variables
+        self.selected_vehicle_filter = tk.StringVar(value="All Vehicles")
 
         # Setup GUI
         self._setup_gui()
@@ -54,9 +58,36 @@ class SimpleVehicleCounter:
         self.canvas.bind("<Button-1>", self.on_mouse_click)
 
         # Control panel
-        control_frame = Frame(main_frame, width=200)
+        control_frame = Frame(main_frame, width=250)
         control_frame.pack(side=tk.RIGHT, fill=tk.Y)
         control_frame.pack_propagate(False)
+
+        # Vehicle Filter Section
+        filter_frame = Frame(control_frame)
+        filter_frame.pack(pady=10, fill=tk.X)
+        
+        Label(filter_frame, text="🎯 VEHICLE FILTER", 
+              font=("Arial", 12, "bold")).pack(pady=(0, 5))
+        
+        # Dropdown untuk filter kendaraan
+        filter_options = ["All Vehicles", "Cars Only", "Trucks Only", "Motorcycles Only"]
+        self.filter_dropdown = ttk.Combobox(filter_frame, 
+                                          textvariable=self.selected_vehicle_filter,
+                                          values=filter_options,
+                                          state="readonly",
+                                          width=18,
+                                          font=("Arial", 10))
+        self.filter_dropdown.pack(pady=5)
+        self.filter_dropdown.bind("<<ComboboxSelected>>", self.on_filter_change)
+
+        # Status untuk filter aktif
+        self.filter_status = Label(filter_frame, text="📊 Counting: All vehicles", 
+                                 font=("Arial", 9), fg="blue")
+        self.filter_status.pack(pady=(5, 0))
+
+        # Separator
+        separator1 = Frame(control_frame, height=2, bg="lightgray")
+        separator1.pack(fill=tk.X, pady=10)
 
         # Buttons
         btn_frame = Frame(control_frame)
@@ -90,6 +121,10 @@ class SimpleVehicleCounter:
                              font=("Arial", 10), fg="blue")
         self.fps_label.pack(pady=5)
 
+        # Separator
+        separator2 = Frame(control_frame, height=2, bg="lightgray")
+        separator2.pack(fill=tk.X, pady=10)
+
         # Vehicle counts
         count_frame = Frame(control_frame)
         count_frame.pack(pady=20, fill=tk.X)
@@ -104,14 +139,21 @@ class SimpleVehicleCounter:
             frame = Frame(count_frame)
             frame.pack(fill=tk.X, pady=3)
             
-            Label(frame, text=f"{emoji} {vehicle.title()}:", 
-                  font=("Arial", 11)).pack(side=tk.LEFT)
+            label_text = Label(frame, text=f"{emoji} {vehicle.title()}:", 
+                              font=("Arial", 11))
+            label_text.pack(side=tk.LEFT)
             
             count_label = Label(frame, text="0", 
                               font=("Arial", 11, "bold"), 
                               fg="green", width=5)
             count_label.pack(side=tk.RIGHT)
-            self.count_labels[vehicle] = count_label
+            
+            # Store both labels for easier updating
+            self.count_labels[vehicle] = {
+                'count': count_label,
+                'text': label_text,
+                'frame': frame
+            }
 
         # Total
         total_frame = Frame(count_frame)
@@ -130,16 +172,69 @@ class SimpleVehicleCounter:
         inst_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
         
         instructions = """📋 INSTRUCTIONS:
-1. Click 'Set Line' 
-2. Click 2 points on video
-3. Click 'START' to begin
-4. Vehicles crossing line will be counted"""
+1. Select vehicle filter type
+2. Click 'Set Line' 
+3. Click 2 points on video
+4. Click 'START' to begin
+5. Only selected vehicles will be counted"""
         
         Label(inst_frame, text=instructions, 
               font=("Arial", 9), 
               justify=tk.LEFT, 
-              wraplength=180,
+              wraplength=230,
               bg="lightyellow").pack(fill=tk.X, padx=5, pady=5)
+
+    def on_filter_change(self, event=None):
+        """Handle filter dropdown change"""
+        selected = self.selected_vehicle_filter.get()
+        
+        # Update filter status
+        if selected == "All Vehicles":
+            self.filter_status.config(text="📊 Counting: All vehicles", fg="blue")
+        elif selected == "Cars Only":
+            self.filter_status.config(text="📊 Counting: Cars only", fg="green")
+        elif selected == "Trucks Only":
+            self.filter_status.config(text="📊 Counting: Trucks only", fg="orange")
+        elif selected == "Motorcycles Only":
+            self.filter_status.config(text="📊 Counting: Motorcycles only", fg="purple")
+        
+        # Update count display visibility
+        self.update_count_display_visibility()
+        
+        print(f"🎯 Filter changed to: {selected}")
+
+    def update_count_display_visibility(self):
+        """Update visibility of count displays based on filter"""
+        selected = self.selected_vehicle_filter.get()
+        
+        for vehicle, labels in self.count_labels.items():
+            if selected == "All Vehicles":
+                # Show all
+                labels['frame'].pack(fill=tk.X, pady=3)
+            elif selected == "Cars Only" and vehicle == "car":
+                labels['frame'].pack(fill=tk.X, pady=3)
+            elif selected == "Trucks Only" and vehicle == "truck":
+                labels['frame'].pack(fill=tk.X, pady=3)
+            elif selected == "Motorcycles Only" and vehicle == "motorcycle":
+                labels['frame'].pack(fill=tk.X, pady=3)
+            else:
+                # Hide this vehicle type
+                labels['frame'].pack_forget()
+
+    def should_count_vehicle(self, vehicle_type):
+        """Check if vehicle should be counted based on filter"""
+        selected = self.selected_vehicle_filter.get()
+        
+        if selected == "All Vehicles":
+            return True
+        elif selected == "Cars Only" and vehicle_type == "car":
+            return True
+        elif selected == "Trucks Only" and vehicle_type == "truck":
+            return True
+        elif selected == "Motorcycles Only" and vehicle_type == "motorcycle":
+            return True
+        
+        return False
 
     def update_loop(self):
         """Main update loop - no threading"""
@@ -161,17 +256,21 @@ class SimpleVehicleCounter:
                 pt1, pt2 = self.line_points
                 cv2.line(processed_frame, pt1, pt2, (0, 0, 255), 3)
                 
-                # Add line label
+                # Add line label with filter info
                 mid_point = ((pt1[0] + pt2[0]) // 2, (pt1[1] + pt2[1]) // 2)
-                cv2.putText(processed_frame, "COUNTING LINE", 
-                          (mid_point[0] - 60, mid_point[1] - 10), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                filter_text = self.selected_vehicle_filter.get().replace(" Only", "").replace("All Vehicles", "ALL")
+                cv2.putText(processed_frame, f"COUNTING LINE ({filter_text})", 
+                          (mid_point[0] - 80, mid_point[1] - 10), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-                # YOLO detection with tracking
+                # YOLO detection with tracking - IMPROVED PARAMETERS
                 results = self.model.track(frame, 
                                          persist=True, 
                                          verbose=False,
-                                         conf=CONFIDENCE_THRESHOLD)
+                                         conf=CONFIDENCE_THRESHOLD,
+                                         iou=0.7,  # Lower IoU threshold
+                                         max_det=50,  # More detections
+                                         classes=[0, 1, 2, 3, 5, 7])  # car, bicycle, motorcycle, airplane, bus, truck
 
                 if results[0].boxes is not None and results[0].boxes.id is not None:
                     boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
@@ -182,20 +281,30 @@ class SimpleVehicleCounter:
                     for box, track_id, conf, cls_id in zip(boxes, ids, confs, clss):
                         label = self.model.names[cls_id]
                         
-                        # Map to vehicle types
+                        # Map to vehicle types - EXPANDED DETECTION
                         vehicle_type = None
                         if label in ['car']:
                             vehicle_type = 'car'
                         elif label in ['truck', 'bus']:
                             vehicle_type = 'truck'
-                        elif label in ['motorcycle', 'motorbike']:
+                        elif label in ['motorcycle', 'motorbike', 'bicycle']:  # Added bicycle
                             vehicle_type = 'motorcycle'
+                        
+                        # DEBUG: Print all detected objects
+                        if vehicle_type:
+                            print(f"🔍 Detected: {label} -> {vehicle_type} (conf: {conf:.2f})")
                         
                         if vehicle_type:
                             x1, y1, x2, y2 = box
                             
-                            # Color coding
-                            if track_id in self.counted_ids:
+                            # Check if this vehicle should be processed based on filter
+                            should_process = self.should_count_vehicle(vehicle_type)
+                            
+                            # Color coding based on filter and counting status
+                            if not should_process:
+                                color = (100, 100, 100)  # Dark gray for filtered out
+                                status = "FILTERED"
+                            elif track_id in self.counted_ids:
                                 color = (128, 128, 128)  # Gray for counted
                                 status = "COUNTED"
                             else:
@@ -216,12 +325,12 @@ class SimpleVehicleCounter:
                                       (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
                                       0.5, color, 2)
 
-                            # Check line crossing
-                            if track_id not in self.counted_ids:
+                            # Check line crossing only for vehicles that should be counted
+                            if should_process and track_id not in self.counted_ids:
                                 if self.check_line_crossing((center_x, center_y), pt1, pt2):
                                     self.vehicle_counts[vehicle_type] += 1
                                     self.counted_ids.add(track_id)
-                                    print(f"✅ Counted: {vehicle_type} (ID: {track_id})")
+                                    print(f"✅ Counted: {vehicle_type} (ID: {track_id}) [Filter: {self.selected_vehicle_filter.get()}]")
                                     self.update_count_display()
 
             # Draw line setting points
@@ -271,9 +380,9 @@ class SimpleVehicleCounter:
     def update_count_display(self):
         """Update count labels"""
         total = 0
-        for vehicle, label in self.count_labels.items():
+        for vehicle, labels in self.count_labels.items():
             count = self.vehicle_counts[vehicle]
-            label.config(text=str(count))
+            labels['count'].config(text=str(count))
             total += count
         self.total_label.config(text=str(total))
 
@@ -288,7 +397,8 @@ class SimpleVehicleCounter:
             self.status_label.config(text="● RUNNING", fg="green")
             self.start_btn.config(text="⏸ STOP", bg="lightcoral", fg="darkred")
             self.counted_ids.clear()
-            print("🚀 Detection started!")
+            filter_info = self.selected_vehicle_filter.get()
+            print(f"🚀 Detection started! Filter: {filter_info}")
         else:
             self.is_running = False
             self.status_label.config(text="● STOPPED", fg="red")
@@ -363,9 +473,10 @@ class SimpleVehicleCounter:
             self.root.destroy()
 
 if __name__ == "__main__":
-    print("🚗 Starting Simple Vehicle Counter")
+    print("🚗 Starting Simple Vehicle Counter with Filter")
     print("💡 Optimized for AMD Ryzen 5 + Radeon RX")
     print("📋 Make sure YOLO model is at: yolo-Weights/yolo11n.pt")
+    print("🎯 New Feature: Vehicle type filtering!")
     
     root = tk.Tk()
     app = SimpleVehicleCounter(root)
