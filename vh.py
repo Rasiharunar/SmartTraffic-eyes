@@ -1,574 +1,1046 @@
 import cv2
 import numpy as np
-import mss
-import time
-import tkinter as tk
-from tkinter import ttk, messagebox
-import threading
 from ultralytics import YOLO
-import mysql.connector
-from datetime import datetime
-from PIL import Image, ImageTk
+import tkinter as tk
+from tkinter import ttk, messagebox, colorchooser
+from PIL import Image, ImageTk, ImageGrab
+import threading
+import time
+from collections import defaultdict
+import math
+import pyautogui
+import json
 
-# SQL to create the database (run this in your MySQL client if needed)
-CREATE_DATABASE_SQL = """
-CREATE DATABASE IF NOT EXISTS vehicle_counting;
-USE vehicle_counting;
-
-CREATE TABLE IF NOT EXISTS vehicle_records (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    mobil INT DEFAULT 0,
-    truck INT DEFAULT 0,
-    bus INT DEFAULT 0,
-    motor INT DEFAULT 0,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-"""
-
-class DatabaseManager:
-    def __init__(self):
-        self.connection = None
-        self.connect_to_database()
-        if self.connection:
-            self.create_table()
-    
-    def connect_to_database(self):
-        """Koneksi ke database MySQL"""
-        try:
-            self.connection = mysql.connector.connect(
-                host='localhost',
-                user='root',
-                password='',
-                # FIX: Corrected database name
-                database='vehicle_counter'
-            )
-            print("✅ Koneksi database berhasil")
-        except mysql.connector.Error as e:
-            print(f"❌ Error koneksi database: {e}")
-            messagebox.showerror("Database Error", f"Gagal koneksi ke database: {e}")
-    
-    def create_table(self):
-        """Buat tabel jika belum ada"""
-        if not self.connection:
-            return
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS vehicle_records (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    mobil INT DEFAULT 0,
-                    truck INT DEFAULT 0,
-                    bus INT DEFAULT 0,
-                    motor INT DEFAULT 0,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            self.connection.commit()
-            print("✅ Tabel vehicle_records siap")
-        except mysql.connector.Error as e:
-            print(f"❌ Error membuat tabel: {e}")
-    
-    def insert_record(self, mobil, truck, bus, motor):
-        """Insert record baru ke database"""
-        if not self.connection:
-            return False
-        try:
-            cursor = self.connection.cursor()
-            query = """
-                INSERT INTO vehicle_records (mobil, truck, bus, motor, timestamp)
-                VALUES (%s, %s, %s, %s, %s)
-            """
-            values = (mobil, truck, bus, motor, datetime.now())
-            cursor.execute(query, values)
-            self.connection.commit()
-            return True
-        except mysql.connector.Error as e:
-            print(f"❌ Error insert record: {e}")
-            return False
-    
-    def get_recent_records(self, limit=10):
-        """Ambil record terbaru"""
-        if not self.connection:
-            return []
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute("""
-                SELECT id, mobil, truck, bus, motor, timestamp 
-                FROM vehicle_records 
-                ORDER BY timestamp DESC 
-                LIMIT %s
-            """, (limit,))
-            return cursor.fetchall()
-        except mysql.connector.Error as e:
-            print(f"❌ Error mengambil records: {e}")
-            return []
-    
-    def get_daily_summary(self):
-        """Ambil ringkasan harian"""
-        # FIX: Return a default dictionary on failure to prevent KeyError
-        default_summary = {'mobil': 0, 'truck': 0, 'bus': 0, 'motor': 0}
-        if not self.connection:
-            return default_summary
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute("""
-                SELECT 
-                    SUM(mobil) as total_mobil,
-                    SUM(truck) as total_truck, 
-                    SUM(bus) as total_bus,
-                    SUM(motor) as total_motor
-                FROM vehicle_records 
-                WHERE DATE(timestamp) = CURDATE()
-            """)
-            result = cursor.fetchone()
-            return {
-                'mobil': result[0] or 0,
-                'truck': result[1] or 0,
-                'bus': result[2] or 0,
-                'motor': result[3] or 0
-            }
-        except mysql.connector.Error as e:
-            print(f"❌ Error mengambil summary: {e}")
-            return default_summary
-
-class ModernVehicleCounter:
-    def __init__(self):
-        # Konfigurasi dasar
-        self.CAPTURE_REGION = {"top": 100, "left": 100, "width": 800, "height": 600}
-        self.MODEL_PATH = "yolo-Weights/yolov8n.pt"
-        self.TARGET_CLASSES = [2, 3, 5, 7]  # car, motorcycle, bus, truck
-        self.CONFIDENCE_THRESHOLD = 0.3
+class LineSettingsDialog:
+    def __init__(self, parent, current_settings=None):
+        self.parent = parent
+        self.result = None
         
-        # Class mapping untuk database
-        self.class_mapping = {
-            2: 'mobil',    # car
-            3: 'motor',    # motorcycle  
-            5: 'bus',      # bus
-            7: 'truck'     # truck
+        # Default settings
+        self.settings = {
+            'line_color': '#FF0000',
+            'line_thickness': 3,
+            'line_style': 'solid',
+            'show_label': True,
+            'label_text': 'COUNTING LINE',
+            'detection_threshold': 20,
+            'line_type': 'manual'  # manual, horizontal, vertical
         }
         
-        # Load YOLO
-        self.model = YOLO(self.MODEL_PATH)
-        self.COCO_LABELS = self.model.names
-        # FIX: Do not initialize mss here; it's not thread-safe
+        if current_settings:
+            self.settings.update(current_settings)
+            
+        self.create_dialog()
         
-        # Database manager
-        self.db = DatabaseManager()
+    def create_dialog(self):
+        self.dialog = tk.Toplevel(self.parent)
+        self.dialog.title("Line Settings")
+        self.dialog.geometry("400x500")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(self.parent)
+        self.dialog.grab_set()
         
-        # Variabel untuk garis pembatas
-        self.counting_line = None
-        self.setting_line = False
-        self.temp_points = []
+        # Center the dialog
+        self.dialog.geometry("+%d+%d" % (
+            self.parent.winfo_rootx() + 50,
+            self.parent.winfo_rooty() + 50
+        ))
         
-        # Variabel untuk tracking dan counting
-        self.tracked_objects = {}
-        self.next_id = 0
+        main_frame = ttk.Frame(self.dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Counters untuk setiap jenis kendaraan
-        self.counts = {
-            'mobil': 0,
-            'truck': 0,
-            'bus': 0,
-            'motor': 0
-        }
+        # Line Type
+        type_frame = ttk.LabelFrame(main_frame, text="Line Type", padding=10)
+        type_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Parameter tracking
-        self.max_disappeared = 15
-        self.max_distance = 80
+        self.line_type_var = tk.StringVar(value=self.settings['line_type'])
+        ttk.Radiobutton(type_frame, text="Manual Draw", variable=self.line_type_var, 
+                       value="manual").pack(anchor=tk.W)
+        ttk.Radiobutton(type_frame, text="Horizontal Line", variable=self.line_type_var, 
+                       value="horizontal").pack(anchor=tk.W)
+        ttk.Radiobutton(type_frame, text="Vertical Line", variable=self.line_type_var, 
+                       value="vertical").pack(anchor=tk.W)
         
-        # Control variables
-        self.running = False
-        self.current_frame = None
+        # Appearance
+        appearance_frame = ttk.LabelFrame(main_frame, text="Appearance", padding=10)
+        appearance_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Setup UI
-        self.setup_ui()
+        # Color
+        color_frame = ttk.Frame(appearance_frame)
+        color_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(color_frame, text="Color:").pack(side=tk.LEFT)
         
-    def setup_ui(self):
-        """Setup antarmuka pengguna modern"""
-        self.root = tk.Tk()
-        self.root.title("🚗 Smart Vehicle Counter v2.0")
-        self.root.geometry("1400x900")
-        self.root.configure(bg='#2c3e50')
+        self.color_var = tk.StringVar(value=self.settings['line_color'])
+        self.color_button = tk.Button(color_frame, text="   ", width=3,
+                                     bg=self.settings['line_color'],
+                                     command=self.choose_color)
+        self.color_button.pack(side=tk.RIGHT)
+        
+        # Thickness
+        thickness_frame = ttk.Frame(appearance_frame)
+        thickness_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(thickness_frame, text="Thickness:").pack(side=tk.LEFT)
+        
+        self.thickness_var = tk.IntVar(value=self.settings['line_thickness'])
+        thickness_spin = ttk.Spinbox(thickness_frame, from_=1, to=10, width=10,
+                                   textvariable=self.thickness_var)
+        thickness_spin.pack(side=tk.RIGHT)
         
         # Style
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure('Title.TLabel', font=('Arial', 16, 'bold'), background='#2c3e50', foreground='white')
-        style.configure('Counter.TLabel', font=('Arial', 24, 'bold'), background='#34495e', foreground='#ecf0f1')
-        style.configure('Info.TLabel', font=('Arial', 10), background='#2c3e50', foreground='#bdc3c7')
+        style_frame = ttk.Frame(appearance_frame)
+        style_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(style_frame, text="Style:").pack(side=tk.LEFT)
         
-        # Main container
-        main_frame = tk.Frame(self.root, bg='#2c3e50')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.style_var = tk.StringVar(value=self.settings['line_style'])
+        style_combo = ttk.Combobox(style_frame, textvariable=self.style_var,
+                                  values=['solid', 'dashed', 'dotted'], width=10)
+        style_combo.pack(side=tk.RIGHT)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="🚗 SMART VEHICLE COUNTER", style='Title.TLabel')
-        title_label.pack(pady=(0, 20))
+        # Label Settings
+        label_frame = ttk.LabelFrame(main_frame, text="Label", padding=10)
+        label_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Top section - Controls and Video
-        top_section = tk.Frame(main_frame, bg='#2c3e50')
-        top_section.pack(fill=tk.BOTH, expand=True)
+        self.show_label_var = tk.BooleanVar(value=self.settings['show_label'])
+        ttk.Checkbutton(label_frame, text="Show Label", 
+                       variable=self.show_label_var).pack(anchor=tk.W)
         
-        # Left panel - Video and controls
-        left_panel = tk.Frame(top_section, bg='#34495e', relief=tk.RAISED, bd=2)
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        text_frame = ttk.Frame(label_frame)
+        text_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(text_frame, text="Text:").pack(side=tk.LEFT)
         
-        # Video frame
-        video_frame = tk.Frame(left_panel, bg='#2c3e50', relief=tk.SUNKEN, bd=2)
-        video_frame.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.label_text_var = tk.StringVar(value=self.settings['label_text'])
+        ttk.Entry(text_frame, textvariable=self.label_text_var).pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
         
-        self.video_label = tk.Label(video_frame, text="📹 LIVE FEED\nPress START to begin", 
-                                   font=('Arial', 14), bg='#2c3e50', fg='white')
-        self.video_label.pack(expand=True)
+        # Detection Settings
+        detection_frame = ttk.LabelFrame(main_frame, text="Detection", padding=10)
+        detection_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Control buttons
-        control_frame = tk.Frame(left_panel, bg='#34495e')
-        control_frame.pack(fill=tk.X, padx=10, pady=10)
+        threshold_frame = ttk.Frame(detection_frame)
+        threshold_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(threshold_frame, text="Detection Threshold:").pack(side=tk.LEFT)
         
-        self.start_btn = tk.Button(control_frame, text="▶️ START", command=self.start_counting,
-                                  bg='#27ae60', fg='white', font=('Arial', 12, 'bold'),
-                                  relief=tk.FLAT, padx=20, pady=10)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
+        self.threshold_var = tk.IntVar(value=self.settings['detection_threshold'])
+        threshold_spin = ttk.Spinbox(threshold_frame, from_=5, to=100, width=10,
+                                   textvariable=self.threshold_var)
+        threshold_spin.pack(side=tk.RIGHT)
         
-        self.stop_btn = tk.Button(control_frame, text="⏹️ STOP", command=self.stop_counting,
-                                 bg='#e74c3c', fg='white', font=('Arial', 12, 'bold'),
-                                 relief=tk.FLAT, padx=20, pady=10, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Label(detection_frame, text="(Distance in pixels for crossing detection)",
+                 font=("Arial", 8)).pack()
         
-        self.line_btn = tk.Button(control_frame, text="📏 SET LINE", command=self.set_line_mode,
-                                 bg='#3498db', fg='white', font=('Arial', 12, 'bold'),
-                                 relief=tk.FLAT, padx=20, pady=10)
-        self.line_btn.pack(side=tk.LEFT, padx=5)
+        # Preset Buttons
+        preset_frame = ttk.LabelFrame(main_frame, text="Presets", padding=10)
+        preset_frame.pack(fill=tk.X, pady=(0, 10))
         
-        self.save_btn = tk.Button(control_frame, text="💾 SAVE TO DB", command=self.save_to_database,
-                                 bg='#9b59b6', fg='white', font=('Arial', 12, 'bold'),
-                                 relief=tk.FLAT, padx=20, pady=10)
-        self.save_btn.pack(side=tk.LEFT, padx=5)
+        preset_buttons_frame = ttk.Frame(preset_frame)
+        preset_buttons_frame.pack()
         
-        # Right panel - Statistics and data
-        right_panel = tk.Frame(top_section, bg='#34495e', relief=tk.RAISED, bd=2, width=400)
-        right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0), pady=0)
-        right_panel.pack_propagate(False)
+        ttk.Button(preset_buttons_frame, text="Red Line", 
+                  command=lambda: self.apply_preset('red')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_buttons_frame, text="Blue Line", 
+                  command=lambda: self.apply_preset('blue')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_buttons_frame, text="Green Line", 
+                  command=lambda: self.apply_preset('green')).pack(side=tk.LEFT, padx=2)
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(button_frame, text="OK", command=self.ok_clicked).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(button_frame, text="Cancel", command=self.cancel_clicked).pack(side=tk.RIGHT)
+        ttk.Button(button_frame, text="Reset", command=self.reset_clicked).pack(side=tk.LEFT)
+        
+    def choose_color(self):
+        color = colorchooser.askcolor(initialcolor=self.color_var.get())
+        if color[1]:  # If user didn't cancel
+            self.color_var.set(color[1])
+            self.color_button.config(bg=color[1])
+            
+    def apply_preset(self, preset_type):
+        presets = {
+            'red': {'line_color': '#FF0000', 'line_thickness': 3, 'line_style': 'solid'},
+            'blue': {'line_color': '#0000FF', 'line_thickness': 2, 'line_style': 'dashed'},
+            'green': {'line_color': '#00FF00', 'line_thickness': 4, 'line_style': 'solid'}
+        }
+        
+        if preset_type in presets:
+            preset = presets[preset_type]
+            self.color_var.set(preset['line_color'])
+            self.color_button.config(bg=preset['line_color'])
+            self.thickness_var.set(preset['line_thickness'])
+            self.style_var.set(preset['line_style'])
+            
+    def reset_clicked(self):
+        self.color_var.set('#FF0000')
+        self.color_button.config(bg='#FF0000')
+        self.thickness_var.set(3)
+        self.style_var.set('solid')
+        self.show_label_var.set(True)
+        self.label_text_var.set('COUNTING LINE')
+        self.threshold_var.set(20)
+        self.line_type_var.set('manual')
+        
+    def ok_clicked(self):
+        self.result = {
+            'line_color': self.color_var.get(),
+            'line_thickness': self.thickness_var.get(),
+            'line_style': self.style_var.get(),
+            'show_label': self.show_label_var.get(),
+            'label_text': self.label_text_var.get(),
+            'detection_threshold': self.threshold_var.get(),
+            'line_type': self.line_type_var.get()
+        }
+        self.dialog.destroy()
+        
+    def cancel_clicked(self):
+        self.result = None
+        self.dialog.destroy()
 
-        # Live counters
-        counter_frame = tk.LabelFrame(right_panel, text="📊 LIVE COUNTERS", 
-                                     bg='#34495e', fg='white', font=('Arial', 12, 'bold'))
-        counter_frame.pack(fill=tk.X, padx=10, pady=10)
+class ScreenVehicleCounter:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("YOLO Vehicle Counter - Screen Capture v2.2 FIXED")
+        self.root.geometry("1400x900")
         
-        self.counter_vars = {}
-        counter_colors = {'mobil': '#3498db', 'truck': '#e67e22', 'bus': '#2ecc71', 'motor': '#f39c12'}
-        
-        for vehicle_type in ['mobil', 'truck', 'bus', 'motor']:
-            frame = tk.Frame(counter_frame, bg=counter_colors[vehicle_type], relief=tk.RAISED, bd=2)
-            frame.pack(fill=tk.X, padx=5, pady=5)
-            
-            icon = "🚗" if vehicle_type == 'mobil' else "🚛" if vehicle_type == 'truck' else "🚌" if vehicle_type == 'bus' else "🏍️"
-            
-            tk.Label(frame, text=f"{icon} {vehicle_type.upper()}", 
-                    bg=counter_colors[vehicle_type], fg='white', 
-                    font=('Arial', 12, 'bold')).pack(side=tk.LEFT, padx=10, pady=5)
-            
-            self.counter_vars[vehicle_type] = tk.StringVar(value="0")
-            tk.Label(frame, textvariable=self.counter_vars[vehicle_type],
-                    bg=counter_colors[vehicle_type], fg='white',
-                    font=('Arial', 20, 'bold')).pack(side=tk.RIGHT, padx=10, pady=5)
-        
-        # Daily summary
-        summary_frame = tk.LabelFrame(right_panel, text="📈 TODAY'S SUMMARY", 
-                                     bg='#34495e', fg='white', font=('Arial', 12, 'bold'))
-        summary_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.summary_text = tk.Text(summary_frame, height=6, bg='#2c3e50', fg='white',
-                                   font=('Courier', 10), relief=tk.FLAT, wrap=tk.WORD)
-        self.summary_text.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Recent records
-        records_frame = tk.LabelFrame(right_panel, text="📋 RECENT RECORDS", 
-                                     bg='#34495e', fg='white', font=('Arial', 12, 'bold'))
-        records_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        columns = ('ID', 'Mobil', 'Truck', 'Bus', 'Motor', 'Time')
-        self.records_tree = ttk.Treeview(records_frame, columns=columns, show='headings', height=8)
-        
-        for col in columns:
-            self.records_tree.heading(col, text=col)
-            self.records_tree.column(col, width=60, anchor=tk.CENTER)
-        
-        scrollbar = ttk.Scrollbar(records_frame, orient=tk.VERTICAL, command=self.records_tree.yview)
-        self.records_tree.configure(yscrollcommand=scrollbar.set)
-        
-        self.records_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5,0), pady=5)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
-        
-        # Status bar
-        self.status_var = tk.StringVar(value="🔴 Ready - Press START to begin counting")
-        status_bar = tk.Label(main_frame, textvariable=self.status_var, 
-                             bg='#1abc9c', fg='white', font=('Arial', 10, 'bold'),
-                             relief=tk.SUNKEN, bd=1, anchor='w', padx=10)
-        status_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        # Load initial data
-        self.update_summary()
-        self.update_records()
-        
-        # Auto refresh every 30 seconds
-        self.root.after(30000, self.auto_refresh)
-    
-    def auto_refresh(self):
-        """Auto refresh data every 30 seconds"""
-        if not self.running: # Only refresh if not actively counting
-            self.update_summary()
-            self.update_records()
-        self.root.after(30000, self.auto_refresh)
-    
-    def update_summary(self):
-        """Update daily summary"""
-        summary = self.db.get_daily_summary()
-        total = sum(summary.values())
-        text = (
-            f"📊 TODAY'S TRAFFIC SUMMARY\n"
-            f"{'='*30}\n"
-            f"🚗 Cars:     {summary.get('mobil', 0):>8}\n"
-            f"🚛 Trucks:   {summary.get('truck', 0):>8}\n"  
-            f"🚌 Buses:    {summary.get('bus', 0):>8}\n"
-            f"🏍️ Motors:   {summary.get('motor', 0):>8}\n"
-            f"{'='*30}\n"
-            f"📈 Total:    {total:>8}"
-        )
-        self.summary_text.config(state=tk.NORMAL)
-        self.summary_text.delete(1.0, tk.END)
-        self.summary_text.insert(1.0, text)
-        self.summary_text.config(state=tk.DISABLED)
-
-    def update_records(self):
-        """Update recent records table"""
-        for item in self.records_tree.get_children():
-            self.records_tree.delete(item)
-        records = self.db.get_recent_records(10)
-        for record in records:
-            time_str = record[5].strftime("%H:%M:%S")
-            self.records_tree.insert('', 0, values=(
-                record[0], record[1], record[2], record[3], record[4], time_str
-            ))
-    
-    def start_counting(self):
-        """Start counting"""
-        self.running = True
-        self.start_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
-        self.status_var.set("🟢 COUNTING - Click on video to set counting line")
-        
-        self.video_thread = threading.Thread(target=self.video_loop, daemon=True)
-        self.video_thread.start()
-    
-    def stop_counting(self):
-        """Stop counting"""
-        self.running = False
-        self.start_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.DISABLED)
-        self.status_var.set("🔴 STOPPED - Press START to resume")
-    
-    def set_line_mode(self):
-        """Set line mode"""
-        self.setting_line = True
-        self.temp_points = []
-        self.status_var.set("📏 Click 2 points on video to set counting line")
-    
-    def save_to_database(self):
-        """Save data to database"""
-        if sum(self.counts.values()) == 0:
-            messagebox.showwarning("Warning", "No new vehicles counted to save!")
+        # Initialize YOLO model
+        try:
+            self.model = YOLO('yolov8n.pt')
+        except:
+            messagebox.showerror("Error", "Failed to load YOLO model. Please ensure you have ultralytics installed.")
             return
         
-        success = self.db.insert_record(
-            self.counts['mobil'],
-            self.counts['truck'], 
-            self.counts['bus'],
-            self.counts['motor']
-        )
+        # Vehicle classes in COCO dataset
+        self.vehicle_classes = [2, 3, 5, 7]  # car, motorcycle, bus, truck
+        self.class_names = {2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck'}
         
-        if success:
-            messagebox.showinfo("Success", "Data saved to database!")
-            # Reset counters
-            for vehicle_type in self.counts:
-                self.counts[vehicle_type] = 0
-                self.counter_vars[vehicle_type].set("0")
+        # Screen capture
+        self.capture_region = None
+        self.is_capturing = False
+        self.is_previewing = False
+        self.selecting_region = False
+        
+        # Counting line with settings - FIXED: Better line tracking
+        self.counting_line = None
+        self.line_drawn = False
+        self.drawing_line = False
+        self.line_draw_enabled = False  # NEW: Track if drawing is enabled
+        self.line_start = None
+        self.line_settings = {
+            'line_color': '#FF0000',
+            'line_thickness': 3,
+            'line_style': 'solid',
+            'show_label': True,
+            'label_text': 'COUNTING LINE',
+            'detection_threshold': 20,
+            'line_type': 'manual'
+        }
+        
+        # Tracking
+        self.tracked_vehicles = {}
+        self.next_id = 0
+        self.counted_ids = set()
+        self.vehicle_count = defaultdict(int)
+        self.total_count = 0
+        
+        # Frame processing
+        self.current_frame = None
+        self.capture_thread = None
+        self.preview_thread = None
+        
+        # GUI setup
+        self.setup_gui()
+        
+    def setup_gui(self):
+        # Main container
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Control frame
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+        
+        # Screen capture controls
+        capture_group = ttk.LabelFrame(control_frame, text="Screen Capture", padding=10)
+        capture_group.pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Button(capture_group, text="Select Region", command=self.select_screen_region).pack(side=tk.LEFT, padx=5)
+        ttk.Button(capture_group, text="Full Screen", command=self.capture_full_screen).pack(side=tk.LEFT, padx=5)
+        
+        # Preview control
+        self.preview_button = ttk.Button(capture_group, text="Start Preview", command=self.toggle_preview, state='disabled')
+        self.preview_button.pack(side=tk.LEFT, padx=5)
+        
+        # Line controls
+        line_group = ttk.LabelFrame(control_frame, text="Counting Line", padding=10)
+        line_group.pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Button(line_group, text="Line Settings", command=self.open_line_settings).pack(side=tk.LEFT, padx=5)
+        self.draw_line_button = ttk.Button(line_group, text="Draw Line", command=self.enable_line_drawing)
+        self.draw_line_button.pack(side=tk.LEFT, padx=5)
+        ttk.Button(line_group, text="Clear Line", command=self.clear_line).pack(side=tk.LEFT, padx=5)
+        
+        # Control buttons
+        control_group = ttk.LabelFrame(control_frame, text="Detection Controls", padding=10)
+        control_group.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.start_button = ttk.Button(control_group, text="Start Detection", command=self.toggle_capture)
+        self.start_button.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(control_group, text="Reset Count", command=self.reset_count).pack(side=tk.LEFT, padx=5)
+        
+        # Status
+        status_group = ttk.LabelFrame(control_frame, text="Status", padding=10)
+        status_group.pack(side=tk.LEFT)
+        
+        self.status_label = ttk.Label(status_group, text="Ready - Select a region first")
+        self.status_label.pack()
+        
+        # Content frame
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Video frame
+        self.video_frame = ttk.LabelFrame(content_frame, text="Video Feed - Preview Mode", padding=5)
+        self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        
+        self.canvas = tk.Canvas(self.video_frame, bg='black', width=800, height=600)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Instructions
+        self.instructions = ttk.Label(self.video_frame, text="1. Select region → 2. Preview will start → 3. Setup line → 4. Start detection", 
+                               font=("Arial", 9))
+        self.instructions.pack(pady=5)
+        
+        # Bind mouse events for line drawing - FIXED: Better event handling
+        self.canvas.bind("<Button-1>", self.start_line)
+        self.canvas.bind("<B1-Motion>", self.draw_line_preview)
+        self.canvas.bind("<ButtonRelease-1>", self.end_line)
+        
+        # Statistics frame
+        stats_frame = ttk.LabelFrame(content_frame, text="Vehicle Statistics", padding=10)
+        stats_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Count displays
+        count_frame = ttk.Frame(stats_frame)
+        count_frame.pack(fill=tk.X, pady=10)
+        
+        self.total_label = ttk.Label(count_frame, text="Total: 0", font=("Arial", 16, "bold"))
+        self.total_label.pack(pady=5)
+        
+        ttk.Separator(count_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+        
+        self.car_label = ttk.Label(count_frame, text="Cars: 0", font=("Arial", 12))
+        self.car_label.pack(pady=2)
+        
+        self.motorcycle_label = ttk.Label(count_frame, text="Motorcycles: 0", font=("Arial", 12))
+        self.motorcycle_label.pack(pady=2)
+        
+        self.bus_label = ttk.Label(count_frame, text="Buses: 0", font=("Arial", 12))
+        self.bus_label.pack(pady=2)
+        
+        self.truck_label = ttk.Label(count_frame, text="Trucks: 0", font=("Arial", 12))
+        self.truck_label.pack(pady=2)
+        
+        ttk.Separator(count_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+        
+        # Status indicators
+        self.line_status = ttk.Label(count_frame, text="Line: Not drawn", font=("Arial", 10))
+        self.line_status.pack(pady=5)
+        
+        self.region_status = ttk.Label(count_frame, text="Region: Not selected", font=("Arial", 10))
+        self.region_status.pack(pady=5)
+        
+        self.preview_status = ttk.Label(count_frame, text="Preview: Off", font=("Arial", 10))
+        self.preview_status.pack(pady=5)
+        
+        # Real-time info
+        info_frame = ttk.LabelFrame(stats_frame, text="Real-time Info", padding=5)
+        info_frame.pack(fill=tk.X, pady=10)
+        
+        self.fps_label = ttk.Label(info_frame, text="FPS: 0", font=("Arial", 9))
+        self.fps_label.pack()
+        
+        self.detection_label = ttk.Label(info_frame, text="Detections: 0", font=("Arial", 9))
+        self.detection_label.pack()
+        
+        # Line info
+        line_info_frame = ttk.LabelFrame(stats_frame, text="Line Configuration", padding=5)
+        line_info_frame.pack(fill=tk.X, pady=10)
+        
+        self.line_info_label = ttk.Label(line_info_frame, text="Type: Manual\nColor: Red\nThickness: 3", 
+                                        font=("Arial", 8), justify=tk.LEFT)
+        self.line_info_label.pack()
+        
+        # Debug info - FIXED: Added debug info
+        debug_frame = ttk.LabelFrame(stats_frame, text="Debug Info", padding=5)
+        debug_frame.pack(fill=tk.X, pady=10)
+        
+        self.debug_label = ttk.Label(debug_frame, text="Draw Mode: Off\nLine Ready: No", 
+                                    font=("Arial", 8), justify=tk.LEFT)
+        self.debug_label.pack()
+        
+    def update_debug_info(self):
+        """Update debug information display"""
+        draw_mode = "On" if self.line_draw_enabled else "Off"
+        line_ready = "Yes" if self.line_drawn else "No"
+        capturing = "Yes" if self.is_capturing else "No"
+        previewing = "Yes" if self.is_previewing else "No"
+        
+        debug_text = f"Draw Mode: {draw_mode}\nLine Ready: {line_ready}\nCapturing: {capturing}\nPreviewing: {previewing}"
+        self.debug_label.config(text=debug_text)
+        
+    def select_screen_region(self):
+        """Allow user to select a screen region by clicking and dragging"""
+        self.root.withdraw()  # Hide main window
+        time.sleep(0.5)  # Give time for window to hide
+        
+        try:
+            # Create overlay window for region selection
+            overlay = tk.Toplevel()
+            overlay.attributes('-fullscreen', True)
+            overlay.attributes('-alpha', 0.3)
+            overlay.configure(bg='black')
+            overlay.attributes('-topmost', True)
             
-            # Update displays
-            self.update_summary()
-            self.update_records()
+            canvas = tk.Canvas(overlay, highlightthickness=0)
+            canvas.pack(fill=tk.BOTH, expand=True)
+            
+            # Instructions
+            canvas.create_text(overlay.winfo_screenwidth()//2, 50, 
+                             text="Click and drag to select region, ESC to cancel", 
+                             fill='white', font=('Arial', 16))
+            
+            start_pos = None
+            selection_rect = None
+            
+            def start_selection(event):
+                nonlocal start_pos, selection_rect
+                start_pos = (event.x, event.y)
+                if selection_rect:
+                    canvas.delete(selection_rect)
+            
+            def drag_selection(event):
+                nonlocal selection_rect
+                if start_pos:
+                    if selection_rect:
+                        canvas.delete(selection_rect)
+                    selection_rect = canvas.create_rectangle(
+                        start_pos[0], start_pos[1], event.x, event.y,
+                        outline='red', width=2
+                    )
+            
+            def end_selection(event):
+                if start_pos:
+                    x1, y1 = start_pos
+                    x2, y2 = event.x, event.y
+                    
+                    # Ensure proper coordinates
+                    left = min(x1, x2)
+                    top = min(y1, y2)
+                    width = abs(x2 - x1)
+                    height = abs(y2 - y1)
+                    
+                    if width > 50 and height > 50:  # Minimum size
+                        self.capture_region = (left, top, left + width, top + height)
+                        self.region_status.config(text=f"Region: {width}x{height}")
+                        self.status_label.config(text="Region selected - Starting preview...")
+                        
+                        # Enable preview button
+                        self.preview_button.config(state='normal')
+                        
+                        # Start preview automatically
+                        overlay.destroy()
+                        self.root.deiconify()
+                        self.root.after(500, self.start_preview_automatically)
+                        self.update_debug_info()
+                        return
+                    
+                    overlay.destroy()
+                    self.root.deiconify()
+            
+            def cancel_selection(event):
+                overlay.destroy()
+                self.root.deiconify()
+            
+            canvas.bind('<Button-1>', start_selection)
+            canvas.bind('<B1-Motion>', drag_selection)
+            canvas.bind('<ButtonRelease-1>', end_selection)
+            overlay.bind('<Escape>', cancel_selection)
+            
+            canvas.focus_set()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to select region: {str(e)}")
+            self.root.deiconify()
+    
+    def capture_full_screen(self):
+        """Set capture region to full screen"""
+        screen_width, screen_height = pyautogui.size()
+        self.capture_region = (0, 0, screen_width, screen_height)
+        self.region_status.config(text=f"Region: Full Screen ({screen_width}x{screen_height})")
+        self.status_label.config(text="Full screen selected - Starting preview...")
+        
+        # Enable preview button
+        self.preview_button.config(state='normal')
+        
+        # Start preview automatically
+        self.start_preview_automatically()
+        self.update_debug_info()
+    
+    def start_preview_automatically(self):
+        """Start preview automatically after region selection"""
+        if not self.is_previewing:
+            self.toggle_preview()
+    
+    def toggle_preview(self):
+        """Start or stop preview mode"""
+        if not self.capture_region:
+            messagebox.showwarning("Warning", "Please select a capture region first")
+            return
+        
+        self.is_previewing = not self.is_previewing
+        self.preview_button.config(text="Stop Preview" if self.is_previewing else "Start Preview")
+        
+        if self.is_previewing:
+            self.preview_status.config(text="Preview: On")
+            self.video_frame.config(text="Video Feed - Preview Mode")
+            self.status_label.config(text="Preview active - Setup your counting line")
+            self.instructions.config(text="Preview active! Now setup your counting line and start detection.")
+            self.preview_thread = threading.Thread(target=self.preview_loop, daemon=True)
+            self.preview_thread.start()
         else:
-            messagebox.showerror("Error", "Failed to save data to database!")
-    
-    def on_video_click(self, event):
-        """Handle click on video to set line"""
-        if self.setting_line and self.current_frame is not None:
-            # Convert click coordinates to frame coordinates
-            x = int(event.x * (self.current_frame.shape[1] / self.video_label.winfo_width()))
-            y = int(event.y * (self.current_frame.shape[0] / self.video_label.winfo_height()))
-            
-            self.temp_points.append((x, y))
-            
-            if len(self.temp_points) == 2:
-                self.counting_line = self.temp_points.copy()
-                self.setting_line = False
-                self.temp_points = []
-                self.status_var.set(f"✅ Counting line set: {self.counting_line}")
-    
-    def video_loop(self):
-        """Main video loop"""
-        # FIX: Initialize mss inside the thread for thread safety
-        sct = mss.mss()
-        prev_time = time.time()
+            self.preview_status.config(text="Preview: Off")
+            self.video_frame.config(text="Video Feed - Stopped")
+            self.status_label.config(text="Preview stopped")
+            self.canvas.delete("all")
+            self.canvas.configure(bg='black')
         
-        while self.running:
+        self.update_debug_info()
+    
+    def preview_loop(self):
+        """Preview loop - shows video without detection"""
+        fps_counter = 0
+        fps_start_time = time.time()
+        
+        while self.is_previewing and not self.is_capturing:
             try:
-                # Capture screenshot
-                screenshot = sct.grab(self.CAPTURE_REGION)
-                frame = np.array(screenshot)
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                # Capture screen
+                frame = self.capture_screen()
+                if frame is None:
+                    time.sleep(0.1)
+                    continue
                 
-                # YOLO detection
-                results = self.model.predict(frame, 
-                                           conf=self.CONFIDENCE_THRESHOLD,
-                                           classes=self.TARGET_CLASSES,
-                                           verbose=False)
+                # Draw counting line if exists (without detection)
+                if self.counting_line:
+                    self.draw_counting_line(frame)
                 
-                detections = []
-                if len(results[0].boxes) > 0:
-                    for box in results[0].boxes:
-                        x1, y1, x2, y2 = box.xyxy[0]
-                        conf = box.conf[0]
-                        cls_id = int(box.cls[0])
-                        detections.append(([x1, y1, x2, y2], conf, cls_id))
+                # Update display
+                self.current_frame = frame.copy()
+                self.root.after(0, self.update_display)
                 
-                self.update_tracking(detections)
-                self.draw_interface(frame)
+                # Calculate FPS for preview
+                fps_counter += 1
+                if fps_counter % 10 == 0:
+                    current_time = time.time()
+                    fps = 10 / (current_time - fps_start_time)
+                    fps_start_time = current_time
+                    self.root.after(0, lambda f=fps: self.fps_label.config(text=f"Preview FPS: {f:.1f}"))
                 
-                current_time = time.time()
-                fps = 1 / (current_time - prev_time)
-                prev_time = current_time
-                cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
-                self.current_frame = frame
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_pil = Image.fromarray(frame_rgb)
-                frame_tk = ImageTk.PhotoImage(image=frame_pil)
-                
-                self.video_label.configure(image=frame_tk, text="")
-                self.video_label.image = frame_tk
-                self.video_label.bind("<Button-1>", self.on_video_click)
+                time.sleep(0.033)  # ~30 FPS
                 
             except Exception as e:
-                print(f"Error in video loop: {e}")
+                print(f"Preview error: {e}")
                 time.sleep(0.1)
     
-    def calculate_distance(self, point1, point2):
-        return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+    def open_line_settings(self):
+        """Open line settings dialog"""
+        dialog = LineSettingsDialog(self.root, self.line_settings)
+        self.root.wait_window(dialog.dialog)
+        
+        if dialog.result:
+            self.line_settings.update(dialog.result)
+            self.update_line_info_display()
+            
+            # If line type changed to horizontal or vertical, create line automatically
+            if self.capture_region and dialog.result['line_type'] != 'manual':
+                self.create_automatic_line()
+        
+        self.update_debug_info()
+                
+    def update_line_info_display(self):
+        """Update line configuration display"""
+        color_name = self.line_settings['line_color']
+        line_type = self.line_settings['line_type'].title()
+        thickness = self.line_settings['line_thickness']
+        
+        info_text = f"Type: {line_type}\nColor: {color_name}\nThickness: {thickness}"
+        self.line_info_label.config(text=info_text)
+        
+    def create_automatic_line(self):
+        """Create horizontal or vertical line automatically"""
+        if not self.capture_region:
+            return
+            
+        region_width = self.capture_region[2] - self.capture_region[0]
+        region_height = self.capture_region[3] - self.capture_region[1]
+        
+        if self.line_settings['line_type'] == 'horizontal':
+            # Horizontal line in the middle
+            y = region_height // 2
+            self.counting_line = [(0, y), (region_width, y)]
+        elif self.line_settings['line_type'] == 'vertical':
+            # Vertical line in the middle
+            x = region_width // 2
+            self.counting_line = [(x, 0), (x, region_height)]
+            
+        self.line_drawn = True
+        self.line_status.config(text="Line: Auto-generated")
+        self.instructions.config(text="Line created automatically. Ready to start detection!")
+        self.update_debug_info()
+        
+    def enable_line_drawing(self):
+        """Enable manual line drawing mode - FIXED"""
+        if not self.capture_region:
+            messagebox.showwarning("Warning", "Please select a capture region first")
+            return
+            
+        if self.is_capturing:
+            messagebox.showwarning("Warning", "Stop detection before drawing a new line")
+            return
+        
+        # FIXED: Properly enable line drawing mode
+        self.line_draw_enabled = True
+        self.line_settings['line_type'] = 'manual'
+        self.draw_line_button.config(text="Drawing Enabled", state='disabled')
+        self.update_line_info_display()
+        self.instructions.config(text="LINE DRAWING ENABLED: Click and drag on the video to draw counting line")
+        self.status_label.config(text="Click and drag on video to draw line")
+        self.update_debug_info()
+        
+    def toggle_capture(self):
+        """Start or stop vehicle detection - FIXED"""
+        if not self.capture_region:
+            messagebox.showwarning("Warning", "Please select a capture region first")
+            return
+        
+        # FIXED: Check if line is properly drawn
+        if not self.line_drawn or self.counting_line is None:
+            messagebox.showwarning("Warning", "Please draw a counting line first")
+            return
+            
+        self.is_capturing = not self.is_capturing
+        self.start_button.config(text="Stop Detection" if self.is_capturing else "Start Detection")
+        
+        if self.is_capturing:
+            # Stop preview when starting detection
+            if self.is_previewing:
+                self.is_previewing = False
+                self.preview_button.config(text="Start Preview")
+                self.preview_status.config(text="Preview: Off")
+            
+            # Disable line drawing when detecting
+            self.line_draw_enabled = False
+            self.draw_line_button.config(text="Draw Line", state='normal')
+            
+            self.video_frame.config(text="Video Feed - Detection Mode")
+            self.status_label.config(text="Detection active - Counting vehicles...")
+            self.capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
+            self.capture_thread.start()
+        else:
+            self.video_frame.config(text="Video Feed - Detection Stopped")
+            self.status_label.config(text="Detection stopped")
+            # Restart preview automatically
+            if self.capture_region:
+                self.root.after(500, lambda: self.toggle_preview() if not self.is_previewing else None)
+        
+        self.update_debug_info()
     
-    def get_center_point(self, box):
-        x1, y1, x2, y2 = box
-        return (int((x1 + x2) / 2), int((y1 + y2) / 2))
+    def capture_screen(self):
+        """Capture screen using PIL ImageGrab"""
+        try:
+            # Use PIL ImageGrab which is more reliable
+            screenshot = ImageGrab.grab(bbox=self.capture_region)
+            frame = np.array(screenshot)
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            return frame
+        except Exception as e:
+            print(f"Screen capture error: {e}")
+            return None
     
-    def line_intersection(self, p1, p2, p3, p4):
-        x1, y1 = p1; x2, y2 = p2
-        x3, y3 = p3; x4, y4 = p4
-        denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
-        if denom == 0: return False
-        t = ((x1-x3)*(y3-y4) - (y1-y3)*(x3-x4)) / denom
-        u = -((x1-x2)*(y1-y3) - (y1-y2)*(x1-x3)) / denom
-        return 0 <= t <= 1 and 0 <= u <= 1
-    
-    def check_line_crossing(self, prev_center, curr_center, vehicle_class):
-        if self.counting_line and self.line_intersection(prev_center, curr_center, self.counting_line[0], self.counting_line[1]):
-            vehicle_type = self.class_mapping.get(vehicle_class)
-            if vehicle_type:
-                self.counts[vehicle_type] += 1
-                self.counter_vars[vehicle_type].set(str(self.counts[vehicle_type]))
-                print(f"✅ {vehicle_type.upper()} crossed! Total: {self.counts[vehicle_type]}")
-                return True
-        return False
+    def capture_loop(self):
+        """Main capture and processing loop for detection"""
+        fps_counter = 0
+        fps_start_time = time.time()
+        
+        while self.is_capturing:
+            try:
+                # Capture screen
+                frame = self.capture_screen()
+                if frame is None:
+                    time.sleep(0.1)
+                    continue
+                
+                # YOLO detection
+                results = self.model(frame, verbose=False)
+                
+                # Process detections
+                detections = []
+                for r in results:
+                    boxes = r.boxes
+                    if boxes is not None:
+                        for box in boxes:
+                            cls = int(box.cls[0])
+                            if cls in self.vehicle_classes:
+                                conf = float(box.conf[0])
+                                if conf > 0.2:  # Confidence threshold
+                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                                    detections.append({
+                                        'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                                        'class': cls,
+                                        'confidence': conf
+                                    })
+                
+                # Update tracking
+                self.update_tracking(detections)
+                
+                # Draw visualizations
+                self.draw_detections(frame, detections)
+                self.draw_counting_line(frame)
+                
+                # Check line crossings
+                self.check_line_crossings()
+                
+                # Update display
+                self.current_frame = frame.copy()
+                self.root.after(0, self.update_display)
+                
+                # Calculate FPS
+                fps_counter += 1
+                if fps_counter % 10 == 0:
+                    current_time = time.time()
+                    fps = 10 / (current_time - fps_start_time)
+                    fps_start_time = current_time
+                    self.root.after(0, lambda f=fps: self.fps_label.config(text=f"Detection FPS: {f:.1f}"))
+                    self.root.after(0, lambda d=len(detections): self.detection_label.config(text=f"Detections: {d}"))
+                
+                time.sleep(0.033)  # ~30 FPS
+                
+            except Exception as e:
+                print(f"Capture error: {e}")
+                time.sleep(0.1)
     
     def update_tracking(self, detections):
-        """Update object tracking"""
-        current_centers = [self.get_center_point(d[0]) for d in detections]
-        used_detection_indices = set()
+        """Update vehicle tracking"""
+        max_distance = 100
+        updated_tracks = {}
         
-        for obj_id in list(self.tracked_objects.keys()):
-            self.tracked_objects[obj_id]["disappeared"] += 1
-            min_distance = float('inf')
-            best_match_idx = -1
+        for detection in detections:
+            bbox = detection['bbox']
+            center = [(bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2]
             
-            for i, center in enumerate(current_centers):
-                if i in used_detection_indices: continue
-                distance = self.calculate_distance(self.tracked_objects[obj_id]["center"], center)
-                if distance < self.max_distance and distance < min_distance:
-                    min_distance = distance
-                    best_match_idx = i
+            best_match = None
+            best_distance = max_distance
             
-            if best_match_idx != -1:
-                old_center = self.tracked_objects[obj_id]["center"]
-                new_center = current_centers[best_match_idx]
-                
-                if not self.tracked_objects[obj_id]["counted"]:
-                    if self.check_line_crossing(old_center, new_center, detections[best_match_idx][2]):
-                        self.tracked_objects[obj_id]["counted"] = True
-                
-                self.tracked_objects[obj_id]["center"] = new_center
-                self.tracked_objects[obj_id]["box"] = detections[best_match_idx][0]
-                self.tracked_objects[obj_id]["class"] = detections[best_match_idx][2]
-                self.tracked_objects[obj_id]["confidence"] = detections[best_match_idx][1]
-                self.tracked_objects[obj_id]["disappeared"] = 0
-                used_detection_indices.add(best_match_idx)
-        
-        for obj_id in list(self.tracked_objects.keys()):
-            if self.tracked_objects[obj_id]["disappeared"] > self.max_disappeared:
-                del self.tracked_objects[obj_id]
-        
-        for i in range(len(detections)):
-            if i not in used_detection_indices:
-                box, conf, cls_id = detections[i]
-                center = self.get_center_point(box)
-                self.tracked_objects[self.next_id] = {
-                    "center": center, "box": box, "class": cls_id,
-                    "confidence": conf, "disappeared": 0, "counted": False
+            for track_id, track in self.tracked_vehicles.items():
+                if track['class'] == detection['class']:
+                    distance = math.sqrt(
+                        (center[0] - track['center'][0])**2 + 
+                        (center[1] - track['center'][1])**2
+                    )
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_match = track_id
+            
+            if best_match:
+                # Keep only last 10 trajectory points to avoid memory issues
+                trajectory = self.tracked_vehicles[best_match].get('trajectory', [])[-9:] + [center]
+                updated_tracks[best_match] = {
+                    'bbox': bbox,
+                    'center': center,
+                    'class': detection['class'],
+                    'confidence': detection['confidence'],
+                    'last_seen': time.time(),
+                    'trajectory': trajectory
+                }
+            else:
+                updated_tracks[self.next_id] = {
+                    'bbox': bbox,
+                    'center': center,
+                    'class': detection['class'],
+                    'confidence': detection['confidence'],
+                    'last_seen': time.time(),
+                    'trajectory': [center]
                 }
                 self.next_id += 1
+        
+        # Keep only recent tracks
+        current_time = time.time()
+        self.tracked_vehicles = {
+            k: v for k, v in updated_tracks.items() 
+            if current_time - v['last_seen'] < 2.0
+        }
     
-    def draw_interface(self, frame):
-        """Draw interface on the frame"""
-        if self.counting_line:
-            cv2.line(frame, self.counting_line[0], self.counting_line[1], (0, 0, 255), 3)
-            cv2.putText(frame, "COUNTING LINE", (self.counting_line[0][0], self.counting_line[0][1] - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        
-        if self.setting_line and len(self.temp_points) == 1:
-            cv2.circle(frame, self.temp_points[0], 5, (255, 0, 0), -1)
-        
-        colors = {2: (255, 0, 0), 3: (0, 255, 0), 5: (0, 0, 255), 7: (255, 255, 0)}
-        
-        for obj_id, data in self.tracked_objects.items():
-            box = data["box"]; center = data["center"]; cls_id = data["class"]
-            conf = data.get("confidence", 0); counted = data["counted"]
-            x1, y1, x2, y2 = map(int, box)
+    def draw_detections(self, frame, detections):
+        """Draw detection boxes and labels"""
+        for track_id, track in self.tracked_vehicles.items():
+            bbox = track['bbox']
+            cls = track['class']
+            conf = track['confidence']
             
-            color = (0, 255, 255) if counted else colors.get(cls_id, (255, 255, 255))
+            # Color coding: green for new, red for counted
+            color = (0, 255, 0) if track_id not in self.counted_ids else (0, 0, 255)
             
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.circle(frame, center, 4, color, -1)
+            # Draw bounding box
+            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
             
-            label = f"ID:{obj_id} {self.class_mapping.get(cls_id, 'N/A')} {conf:.2f}"
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            # Draw trajectory
+            trajectory = track.get('trajectory', [])
+            if len(trajectory) > 1:
+                for i in range(1, len(trajectory)):
+                    cv2.line(frame, tuple(trajectory[i-1]), tuple(trajectory[i]), color, 1)
+            
+            # Draw label
+            label = f"{self.class_names[cls]} #{track_id}"
+            cv2.putText(frame, label, (bbox[0], bbox[1] - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     
+    def draw_counting_line(self, frame):
+        """Draw the counting line with custom settings"""
+        if not self.counting_line:
+            return
+            
+        # Convert hex color to BGR
+        hex_color = self.line_settings['line_color'].lstrip('#')
+        rgb_color = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        bgr_color = (rgb_color[2], rgb_color[1], rgb_color[0])  # Convert RGB to BGR
+        
+        thickness = self.line_settings['line_thickness']
+        style = self.line_settings['line_style']
+        
+        # Draw line based on style
+        if style == 'solid':
+            cv2.line(frame, self.counting_line[0], self.counting_line[1], bgr_color, thickness)
+        elif style == 'dashed':
+            self.draw_dashed_line(frame, self.counting_line[0], self.counting_line[1], bgr_color, thickness)
+        elif style == 'dotted':
+            self.draw_dotted_line(frame, self.counting_line[0], self.counting_line[1], bgr_color, thickness)
+        
+        # Draw label if enabled
+        if self.line_settings['show_label'] and self.line_settings['label_text']:
+            cv2.putText(frame, self.line_settings['label_text'], 
+                       (self.counting_line[0][0], self.counting_line[0][1] - 15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, bgr_color, 2)
+    
+    def draw_dashed_line(self, frame, pt1, pt2, color, thickness):
+        """Draw a dashed line"""
+        dist = np.sqrt((pt2[0] - pt1[0])**2 + (pt2[1] - pt1[1])**2)
+        dash_length = 10
+        gap_length = 5
+        
+        for i in range(0, int(dist), dash_length + gap_length):
+            start = (
+                int(pt1[0] + (pt2[0] - pt1[0]) * i / dist),
+                int(pt1[1] + (pt2[1] - pt1[1]) * i / dist)
+            )
+            end = (
+                int(pt1[0] + (pt2[0] - pt1[0]) * min(i + dash_length, dist) / dist),
+                int(pt1[1] + (pt2[1] - pt1[1]) * min(i + dash_length, dist) / dist)
+            )
+            cv2.line(frame, start, end, color, thickness)
+    
+    def draw_dotted_line(self, frame, pt1, pt2, color, thickness):
+        """Draw a dotted line"""
+        dist = np.sqrt((pt2[0] - pt1[0])**2 + (pt2[1] - pt1[1])**2)
+        dot_spacing = 8
+        
+        for i in range(0, int(dist), dot_spacing):
+            point = (
+                int(pt1[0] + (pt2[0] - pt1[0]) * i / dist),
+                int(pt1[1] + (pt2[1] - pt1[1]) * i / dist)
+            )
+            cv2.circle(frame, point, thickness, color, -1)
+    
+    def check_line_crossings(self):
+        """Check if vehicles have crossed the counting line"""
+        if not self.counting_line:
+            return
+            
+        line_start, line_end = self.counting_line
+        threshold = self.line_settings['detection_threshold']
+        
+        for track_id, track in self.tracked_vehicles.items():
+            if track_id in self.counted_ids:
+                continue
+            
+            trajectory = track.get('trajectory', [])
+            if len(trajectory) < 2:
+                continue
+            
+            # Check if the trajectory crossed the line
+            for i in range(1, len(trajectory)):
+                if self.line_intersection(trajectory[i-1], trajectory[i], line_start, line_end):
+                    self.counted_ids.add(track_id)
+                    vehicle_class = track['class']
+                    self.vehicle_count[self.class_names[vehicle_class]] += 1
+                    self.total_count += 1
+                    self.root.after(0, self.update_count_display)
+                    break
+    
+    def line_intersection(self, p1, p2, p3, p4):
+        """Check if line segments p1-p2 and p3-p4 intersect"""
+        def ccw(A, B, C):
+            return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
+        return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
+    
+    def update_display(self):
+        """Update the canvas with current frame"""
+        if self.current_frame is None:
+            return
+        
+        # Resize frame to fit canvas
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        if canvas_width > 1 and canvas_height > 1:
+            frame_resized = cv2.resize(self.current_frame, (canvas_width, canvas_height))
+            frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame_rgb)
+            img_tk = ImageTk.PhotoImage(img)
+            
+            self.canvas.delete("all")
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
+            self.canvas.image = img_tk
+            
+            # Draw counting line overlay if exists
+            if self.counting_line:
+                self.draw_line_on_canvas(canvas_width, canvas_height)
+    
+    def draw_line_on_canvas(self, canvas_width, canvas_height):
+        """Draw counting line on canvas"""
+        if not self.capture_region:
+            return
+            
+        region_width = self.capture_region[2] - self.capture_region[0]
+        region_height = self.capture_region[3] - self.capture_region[1]
+        
+        scale_x = canvas_width / region_width
+        scale_y = canvas_height / region_height
+        
+        x1 = int(self.counting_line[0][0] * scale_x)
+        y1 = int(self.counting_line[0][1] * scale_y)
+        x2 = int(self.counting_line[1][0] * scale_x)
+        y2 = int(self.counting_line[1][1] * scale_y)
+        
+        # Draw line with settings
+        color = self.line_settings['line_color']
+        width = max(1, self.line_settings['line_thickness'])
+        
+        if self.line_settings['line_style'] == 'dashed':
+            # Dashed line on canvas
+            self.canvas.create_line(x1, y1, x2, y2, fill=color, width=width, dash=(10, 5))
+        else:
+            self.canvas.create_line(x1, y1, x2, y2, fill=color, width=width)
+        
+        # Draw label if enabled
+        if self.line_settings['show_label'] and self.line_settings['label_text']:
+            self.canvas.create_text(x1, y1 - 15, text=self.line_settings['label_text'], 
+                                  fill=color, font=("Arial", 12, "bold"))
+    
+    # Line drawing methods - FIXED: Improved line drawing logic
+    def start_line(self, event):
+        """Start drawing line - FIXED"""
+        if self.is_capturing or not self.line_draw_enabled:
+            return
+        if self.line_settings['line_type'] != 'manual':
+            return
+            
+        print(f"Starting line at: {event.x}, {event.y}")  # Debug
+        self.drawing_line = True
+        self.line_start = (event.x, event.y)
+        
+    def draw_line_preview(self, event):
+        """Draw line preview - FIXED"""
+        if not self.drawing_line or not self.line_draw_enabled:
+            return
+        if self.line_settings['line_type'] != 'manual':
+            return
+            
+        self.canvas.delete("temp_line")
+        self.canvas.create_line(self.line_start[0], self.line_start[1], 
+                               event.x, event.y, fill="blue", width=3, tags="temp_line")
+        
+    def end_line(self, event):
+        """End drawing line - FIXED"""
+        if not self.drawing_line or not self.line_draw_enabled:
+            return
+        if self.line_settings['line_type'] != 'manual':
+            return
+            
+        print(f"Ending line at: {event.x}, {event.y}")  # Debug
+        self.drawing_line = False
+        
+        if self.capture_region and self.line_start:
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            
+            region_width = self.capture_region[2] - self.capture_region[0]
+            region_height = self.capture_region[3] - self.capture_region[1]
+            
+            scale_x = region_width / canvas_width
+            scale_y = region_height / canvas_height
+            
+            start_x = int(self.line_start[0] * scale_x)
+            start_y = int(self.line_start[1] * scale_y)
+            end_x = int(event.x * scale_x)
+            end_y = int(event.y * scale_y)
+            
+            # FIXED: Properly create the counting line
+            self.counting_line = [(start_x, start_y), (end_x, end_y)]
+            self.line_drawn = True
+            self.line_draw_enabled = False  # Disable drawing after line is created
+            
+            # Update UI
+            self.line_status.config(text="Line: Drawn")
+            self.draw_line_button.config(text="Draw Line", state='normal')
+            self.instructions.config(text="Line drawn successfully. Ready to start detection!")
+            
+            print(f"Line created: {self.counting_line}")  # Debug
+                
+        self.canvas.delete("temp_line")
+        self.update_debug_info()
+        
+    def clear_line(self):
+        """Clear the counting line - FIXED"""
+        self.counting_line = None
+        self.line_drawn = False
+        self.line_draw_enabled = False
+        self.drawing_line = False
+        self.line_start = None
+        
+        # Update UI
+        self.line_status.config(text="Line: Not drawn")
+        self.draw_line_button.config(text="Draw Line", state='normal')
+        self.canvas.delete("temp_line")
+        self.instructions.config(text="Line cleared. Draw a new line or configure auto-line.")
+        self.update_debug_info()
+        
+    def reset_count(self):
+        self.counted_ids.clear()
+        self.vehicle_count.clear()
+        self.total_count = 0
+        self.tracked_vehicles.clear()
+        self.next_id = 0
+        self.update_count_display()
+        
+    def update_count_display(self):
+        self.total_label.config(text=f"Total: {self.total_count}")
+        self.car_label.config(text=f"Cars: {self.vehicle_count.get('car', 0)}")
+        self.motorcycle_label.config(text=f"Motorcycles: {self.vehicle_count.get('motorcycle', 0)}")
+        self.bus_label.config(text=f"Buses: {self.vehicle_count.get('bus', 0)}")
+        self.truck_label.config(text=f"Trucks: {self.vehicle_count.get('truck', 0)}")
+        
     def run(self):
-        """Run the application"""
         self.root.mainloop()
 
 if __name__ == "__main__":
-    print("🚗 Starting Smart Vehicle Counter...")
-    print("⚠️  Make sure MySQL is running and the 'vehicle_counting' database exists.")
-    print("📋 You can create the database by running the SQL commands in the code.")
-    
-    app = ModernVehicleCounter()
+    app = ScreenVehicleCounter()
     app.run()
