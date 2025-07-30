@@ -1,4 +1,4 @@
-#Atur DB di line 264
+#Atur DB di line 266
 
 import cv2
 import numpy as np
