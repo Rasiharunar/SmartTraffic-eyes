@@ -222,8 +222,8 @@ class ScreenVehicleCounter:
         self.is_previewing = False
         self.selecting_region = False
         
-        # Counting line with settings - FIXED: Better line tracking
-        self.counting_line = None
+        # Counting lines (multi-line support)
+        self.counting_lines = []  # List of [p1, p2]
         self.line_drawn = False
         self.drawing_line = False
         self.line_draw_enabled = False  # NEW: Track if drawing is enabled
@@ -631,15 +631,14 @@ class ScreenVehicleCounter:
                 if frame is None:
                     time.sleep(0.1)
                     continue
-                
-                # Draw counting line if exists (without detection)
-                if self.counting_line:
+                # Draw all counting lines if exist (tanpa deteksi)
+                if self.counting_lines:
                     self.draw_counting_line(frame)
-                
+
                 # Update display
                 self.current_frame = frame.copy()
                 self.root.after(0, self.update_display)
-                
+
                 # Calculate FPS for preview
                 fps_counter += 1
                 if fps_counter % 10 == 0:
@@ -647,9 +646,9 @@ class ScreenVehicleCounter:
                     fps = 10 / (current_time - fps_start_time)
                     fps_start_time = current_time
                     self.root.after(0, lambda f=fps: self.fps_label.config(text=f"Preview FPS: {f:.1f}"))
-                
+
                 time.sleep(0.033)  # ~30 FPS
-                
+
             except Exception as e:
                 print(f"Preview error: {e}")
                 time.sleep(0.1)
@@ -701,21 +700,18 @@ class ScreenVehicleCounter:
         self.update_debug_info()
         
     def enable_line_drawing(self):
-        """Enable manual line drawing mode - FIXED"""
+        """Enable manual line drawing mode for multiple lines"""
         if not self.capture_region:
             messagebox.showwarning("Warning", "Please select a capture region first")
             return
-            
         if self.is_capturing:
             messagebox.showwarning("Warning", "Stop detection before drawing a new line")
             return
-        
-        # FIXED: Properly enable line drawing mode
         self.line_draw_enabled = True
         self.line_settings['line_type'] = 'manual'
         self.draw_line_button.config(text="Drawing Enabled", state='disabled')
         self.update_line_info_display()
-        self.instructions.config(text="LINE DRAWING ENABLED: Click and drag on the video to draw counting line")
+        self.instructions.config(text="LINE DRAWING ENABLED: Click and drag on the video untuk membuat counting line. Ulangi untuk menambah lebih banyak garis.")
         self.status_label.config(text="Click and drag on video to draw line")
         self.update_debug_info()
         
@@ -727,7 +723,7 @@ class ScreenVehicleCounter:
 
         if not self.is_capturing:
             # Akan memulai detection, validasi garis
-            if not self.line_drawn or self.counting_line is None:
+            if not self.line_drawn or len(self.counting_lines) == 0:
                 messagebox.showwarning("Warning", "Please draw a counting line first")
                 return
 
@@ -892,74 +888,49 @@ class ScreenVehicleCounter:
         # print(f"Active tracks: {len(self.tracked_vehicles)}") 
         
     def check_line_crossings(self):
-        """Check if any tracked vehicles cross the counting line"""
-        if not self.line_drawn or self.counting_line is None:
-            # print("Line not drawn or missing.") 
+        """Check if any tracked vehicles cross any counting line"""
+        if not self.line_drawn or not self.counting_lines:
             return
-            
-        line_p1 = np.array(self.counting_line[0])
-        line_p2 = np.array(self.counting_line[1])
-        
         threshold = self.line_settings['detection_threshold']
-        # print(f"Checking crossings with threshold: {threshold}") 
-        
-        for track_id, track in list(self.tracked_vehicles.items()): # Iterate over a copy
-            # print(f"Processing track_id: {track_id}") 
+        for track_id, track in list(self.tracked_vehicles.items()):
             if track_id in self.counted_ids:
-                # print(f"Track {track_id} already counted. Skipping.") 
                 continue
-            
-            # Get current and previous position (if available)
             current_pos = np.array(track['center'])
-            
             if len(track['path']) < 2:
-                # print(f"Track {track_id} path too short ({len(track['path'])}). Skipping.") 
-                continue # Need at least two points to determine direction
-                
+                continue
             prev_pos = np.array(track['path'][-2])
-            
-            # Vector from line_p1 to current_pos
-            vec_p1_current = current_pos - line_p1
-            # Vector from line_p1 to prev_pos
-            vec_p1_prev = prev_pos - line_p1
-            
-            # Vector of the line itself
-            vec_line = line_p2 - line_p1
-            
-            # Cross products to determine on which side of the line the points are
-            # This is the core logic for line crossing detection
-            cross_product_current = np.cross(vec_line, vec_p1_current)
-            cross_product_prev = np.cross(vec_line, vec_p1_prev)
-            
-            print(f"Track {track_id}: prev_pos={prev_pos}, current_pos={current_pos}") 
-            print(f"Cross products: current={cross_product_current}, prev={cross_product_prev}") 
-
-            # Check if current and previous points are on opposite sides of the line
-            if (cross_product_current * cross_product_prev < 0):
-                print(f"Track {track_id} potentially crossed line (opposite sides detected).") 
-                # Calculate distance from the current position to the line segment
-                line_len_sq = np.sum((line_p2 - line_p1)**2)
-                if line_len_sq == 0: # Line is a point
-                    dist_to_line = np.linalg.norm(current_pos - line_p1)
+            for line_idx, line in enumerate(self.counting_lines):
+                line_p1 = np.array(line[0])
+                line_p2 = np.array(line[1])
+                vec_p1_current = current_pos - line_p1
+                vec_p1_prev = prev_pos - line_p1
+                vec_line = line_p2 - line_p1
+                cross_product_current = np.cross(vec_line, vec_p1_current)
+                cross_product_prev = np.cross(vec_line, vec_p1_prev)
+                print(f"Track {track_id}: prev_pos={prev_pos}, current_pos={current_pos}, line={line_idx}")
+                print(f"Cross products: current={cross_product_current}, prev={cross_product_prev}")
+                if (cross_product_current * cross_product_prev < 0):
+                    print(f"Track {track_id} potentially crossed line {line_idx+1} (opposite sides detected).")
+                    line_len_sq = np.sum((line_p2 - line_p1)**2)
+                    if line_len_sq == 0:
+                        dist_to_line = np.linalg.norm(current_pos - line_p1)
+                    else:
+                        t = max(0, min(1, np.dot(current_pos - line_p1, line_p2 - line_p1) / line_len_sq))
+                        projection = line_p1 + t * (line_p2 - line_p1)
+                        dist_to_line = np.linalg.norm(current_pos - projection)
+                    print(f"Track {track_id}: Distance to line {line_idx+1} = {dist_to_line:.2f}")
+                    if dist_to_line < threshold:
+                        vehicle_type = self.class_names.get(track['class'], 'unknown')
+                        self.vehicle_count[vehicle_type] += 1
+                        self.total_count += 1
+                        self.counted_ids.add(track_id)
+                        print(f"Vehicle {track_id} ({vehicle_type}) *COUNTED* on line {line_idx+1}! Total {vehicle_type}: {self.vehicle_count[vehicle_type]}, Total: {self.total_count}")
+                        self.update_count_labels()
+                        break # Only count once per track
+                    else:
+                        print(f"Track {track_id} crossed but too far from line {line_idx+1} (dist={dist_to_line:.2f} >= threshold={threshold}).")
                 else:
-                    # Project point onto the line segment to find the closest point
-                    t = max(0, min(1, np.dot(current_pos - line_p1, line_p2 - line_p1) / line_len_sq))
-                    projection = line_p1 + t * (line_p2 - line_p1)
-                    dist_to_line = np.linalg.norm(current_pos - projection)
-
-                print(f"Track {track_id}: Distance to line = {dist_to_line:.2f}") 
-
-                if dist_to_line < threshold: # If close enough to the line
-                    vehicle_type = self.class_names.get(track['class'], 'unknown')
-                    self.vehicle_count[vehicle_type] += 1
-                    self.total_count += 1
-                    self.counted_ids.add(track_id)
-                    print(f"Vehicle {track_id} ({vehicle_type}) *COUNTED*! Total {vehicle_type}: {self.vehicle_count[vehicle_type]}, Total: {self.total_count}") # This will always print on count
-                    self.update_count_labels()
-                else:
-                    print(f"Track {track_id} crossed but too far from line (dist={dist_to_line:.2f} >= threshold={threshold}).") 
-            else:
-                print(f"Track {track_id} did not cross line (same side).") 
+                    print(f"Track {track_id} did not cross line {line_idx+1} (same side).")
                     
     def update_count_labels(self):
         """Update the count labels in the GUI"""
@@ -1006,44 +977,35 @@ class ScreenVehicleCounter:
                 cv2.line(frame, path[i-1], path[i], (255, 0, 0), 1)
 
     def draw_counting_line(self, frame):
-        """Draw the counting line on the frame"""
-        if self.counting_line:
-            p1 = self.counting_line[0]
-            p2 = self.counting_line[1]
-            
-            # Convert hex color to BGR
+        """Draw all counting lines on the frame"""
+        if self.counting_lines:
             hex_color = self.line_settings['line_color'].lstrip('#')
             rgb_color = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-            bgr_color = (rgb_color[2], rgb_color[1], rgb_color[0]) # OpenCV uses BGR
-            
+            bgr_color = (rgb_color[2], rgb_color[1], rgb_color[0])
             thickness = self.line_settings['line_thickness']
             style = self.line_settings['line_style']
-            
-            if style == 'solid':
-                cv2.line(frame, p1, p2, bgr_color, thickness)
-            else: # For dashed/dotted, draw multiple small segments
-                length = int(math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2))
-                if length == 0: return
-
-                num_segments = length // (thickness * 2) # Adjust based on thickness
-                if num_segments == 0: num_segments = 1
-                
-                dx = (p2[0] - p1[0]) / num_segments
-                dy = (p2[1] - p1[1]) / num_segments
-                
-                for i in range(num_segments):
-                    start_seg_x = int(p1[0] + i * dx)
-                    start_seg_y = int(p1[1] + i * dy)
-                    end_seg_x = int(p1[0] + (i + 0.5) * dx) # Draw half segment, half gap
-                    end_seg_y = int(p1[1] + (i + 0.5) * dy)
-                    cv2.line(frame, (start_seg_x, start_seg_y), (end_seg_x, end_seg_y), bgr_color, thickness)
-                    
-            if self.line_settings['show_label']:
-                label_text = self.line_settings['label_text']
-                mid_x = (p1[0] + p2[0]) // 2
-                mid_y = (p1[1] + p2[1]) // 2
-                cv2.putText(frame, label_text, (mid_x + 10, mid_y - 10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, bgr_color, 2)
+            for idx, line in enumerate(self.counting_lines):
+                p1, p2 = line
+                if style == 'solid':
+                    cv2.line(frame, p1, p2, bgr_color, thickness)
+                else:
+                    length = int(math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2))
+                    if length == 0: continue
+                    num_segments = length // (thickness * 2)
+                    if num_segments == 0: num_segments = 1
+                    dx = (p2[0] - p1[0]) / num_segments
+                    dy = (p2[1] - p1[1]) / num_segments
+                    for i in range(num_segments):
+                        start_seg_x = int(p1[0] + i * dx)
+                        start_seg_y = int(p1[1] + i * dy)
+                        end_seg_x = int(p1[0] + (i + 0.5) * dx)
+                        end_seg_y = int(p1[1] + (i + 0.5) * dy)
+                        cv2.line(frame, (start_seg_x, start_seg_y), (end_seg_x, end_seg_y), bgr_color, thickness)
+                if self.line_settings['show_label']:
+                    label_text = self.line_settings['label_text']
+                    mid_x = (p1[0] + p2[0]) // 2
+                    mid_y = (p1[1] + p2[1]) // 2
+                    cv2.putText(frame, f"{label_text} {idx+1}", (mid_x + 10, mid_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, bgr_color, 2)
 
     def start_line(self, event):
         """Start drawing the line on canvas (store canvas coords for preview)"""
@@ -1063,7 +1025,7 @@ class ScreenVehicleCounter:
                                     tags="temp_line")
             
     def end_line(self, event):
-        """End line drawing and set the counting line (convert canvas coords to frame coords)"""
+        """End line drawing and add a new counting line (convert canvas coords to frame coords)"""
         if self.drawing_line and hasattr(self, 'line_start_canvas'):
             self.drawing_line = False
             self.canvas.delete("temp_line") # Remove temp line
@@ -1077,35 +1039,28 @@ class ScreenVehicleCounter:
             if self.current_frame is not None:
                 frame_height, frame_width = self.current_frame.shape[:2]
             else:
-                # fallback ke capture_region
                 frame_width = self.capture_region[2] - self.capture_region[0] if self.capture_region else canvas_width
                 frame_height = self.capture_region[3] - self.capture_region[1] if self.capture_region else canvas_height
 
-
-            # Hitung scaling dan offset agar konversi lebih akurat
             frame_aspect = frame_width / frame_height
             canvas_aspect = canvas_width / canvas_height
 
             if frame_aspect > canvas_aspect:
-                # Gambar di canvas penuh lebar, ada padding vertikal
                 scale = canvas_width / frame_width
                 new_height = int(frame_height * scale)
                 y_offset = (canvas_height - new_height) // 2
                 x_offset = 0
             else:
-                # Gambar di canvas penuh tinggi, ada padding horizontal
                 scale = canvas_height / frame_height
                 new_width = int(frame_width * scale)
                 x_offset = (canvas_width - new_width) // 2
                 y_offset = 0
 
             def canvas_to_frame(x, y):
-                # Kurangi offset, lalu scaling balik ke frame
                 x_adj = x - x_offset
                 y_adj = y - y_offset
                 x_frame = int(x_adj / scale)
                 y_frame = int(y_adj / scale)
-                # Clamp agar tidak keluar frame
                 x_frame = max(0, min(frame_width - 1, x_frame))
                 y_frame = max(0, min(frame_height - 1, y_frame))
                 return (x_frame, y_frame)
@@ -1113,44 +1068,43 @@ class ScreenVehicleCounter:
             p1 = canvas_to_frame(*p1_canvas)
             p2 = canvas_to_frame(*p2_canvas)
 
-            # Ensure a meaningful line is drawn
-            if math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2) > 10: # Minimum length
-                self.counting_line = [p1, p2]
+            if math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2) > 10:
+                self.counting_lines.append([p1, p2])
                 self.line_drawn = True
-                self.line_draw_enabled = False # Disable drawing after line is set
-                self.draw_line_button.config(text="Draw Line", state='normal')
-                self.line_status.config(text="Line: Drawn Manually")
-                self.instructions.config(text="Counting line drawn! Ready to start detection.")
+                self.line_draw_enabled = True # Tetap aktif agar bisa tambah garis
+                self.draw_line_button.config(text="Drawing Enabled", state='disabled')
+                self.line_status.config(text=f"Lines: {len(self.counting_lines)} drawn")
+                self.instructions.config(text="Counting line added! Anda bisa menggambar lebih banyak garis atau mulai deteksi.")
                 self.update_debug_info()
             else:
                 messagebox.showwarning("Warning", "Line too short. Please draw a longer line.")
-                self.line_drawn = False
-                self.line_status.config(text="Line: Not drawn")
+                self.line_drawn = len(self.counting_lines) > 0
+                self.line_status.config(text=f"Lines: {len(self.counting_lines)} drawn")
             del self.line_start_canvas
             
     def clear_line(self):
-        """Clear the counting line"""
-        if messagebox.askyesno("Clear Line", "Are you sure you want to clear the counting line?"):
-            self.counting_line = None
+        """Clear all counting lines"""
+        if messagebox.askyesno("Clear Line", "Are you sure you want to clear all counting lines?"):
+            self.counting_lines = []
             self.line_drawn = False
-            self.line_status.config(text="Line: Not drawn")
-            self.instructions.config(text="Counting line cleared. Please draw a new line or select an automatic one.")
+            self.line_status.config(text="Lines: 0 drawn")
+            self.instructions.config(text="Semua counting line dihapus. Silakan gambar garis baru atau pilih otomatis.")
             self.update_debug_info()
-            # If detection is running, stop it because no line is set
             if self.is_capturing:
                 self.toggle_capture()
 
+        # ...existing code...
     def update_display(self):
         """Update the Tkinter canvas with the current frame, responsif terhadap resize"""
         if self.current_frame is not None:
             img = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(img)
 
-            # Ambil ukuran canvas yang terbaru
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
 
             if canvas_width < 10 or canvas_height < 10:
+                print("Canvas terlalu kecil, tidak update gambar.")
                 return
 
             img_width, img_height = img.size
@@ -1169,8 +1123,9 @@ class ScreenVehicleCounter:
 
             self.canvas.delete("all")
             self.canvas.create_image(canvas_width / 2, canvas_height / 2, image=self.photo, anchor=tk.CENTER)
-
-        # Pastikan canvas dan statistik frame selalu mengikuti ukuran window
+            print("Gambar berhasil diupdate ke canvas.")
+        else:
+            print("Frame kosong, tidak ada gambar untuk ditampilkan.")
         self.root.update_idletasks()
             
 if __name__ == "__main__":
