@@ -269,11 +269,11 @@ class ScreenVehicleCounter:
             # --- KONFIGURASI DATABASE POSTGRESQL ---
             # Ganti dengan detail koneksi PostgreSQL Anda
             self.db_conn = psycopg2.connect(
-                dbname="smart_tf",   
-                user="postgres",      
-                password="1234",  
-                host="localhost",         
-                port="5432"   # default 5432
+                dbname="",   
+                user="",      
+                password="",  
+                host="",         
+                port=""   # default 5432
             )
             self.cursor = self.db_conn.cursor()
             self.cursor.execute('''
