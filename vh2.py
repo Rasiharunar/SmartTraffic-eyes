@@ -344,129 +344,139 @@ class ScreenVehicleCounter:
 
     def setup_gui(self):
         # Main container
+        self.root.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
         main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+        main_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        main_frame.rowconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+
         # Control frame
         control_frame = ttk.Frame(main_frame)
-        control_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
-        
+        control_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+
         # Screen capture controls
         capture_group = ttk.LabelFrame(control_frame, text="Screen Capture", padding=10)
         capture_group.pack(side=tk.LEFT, padx=(0, 10))
-        
+
         ttk.Button(capture_group, text="Select Region", command=self.select_screen_region).pack(side=tk.LEFT, padx=5)
         ttk.Button(capture_group, text="Full Screen", command=self.capture_full_screen).pack(side=tk.LEFT, padx=5)
-        
+
         # Preview control
         self.preview_button = ttk.Button(capture_group, text="Start Preview", command=self.toggle_preview, state='disabled')
         self.preview_button.pack(side=tk.LEFT, padx=5)
-        
+
         # Line controls
         line_group = ttk.LabelFrame(control_frame, text="Counting Line", padding=10)
         line_group.pack(side=tk.LEFT, padx=(0, 10))
-        
+
         ttk.Button(line_group, text="Line Settings", command=self.open_line_settings).pack(side=tk.LEFT, padx=5)
         self.draw_line_button = ttk.Button(line_group, text="Draw Line", command=self.enable_line_drawing)
         self.draw_line_button.pack(side=tk.LEFT, padx=5)
         ttk.Button(line_group, text="Clear Line", command=self.clear_line).pack(side=tk.LEFT, padx=5)
-        
+
         # Control buttons
         control_group = ttk.LabelFrame(control_frame, text="Detection Controls", padding=10)
         control_group.pack(side=tk.LEFT, padx=(0, 10))
-        
+
         self.start_button = ttk.Button(control_group, text="Start Detection", command=self.toggle_capture)
         self.start_button.pack(side=tk.LEFT, padx=5)
-        
+
         ttk.Button(control_group, text="Reset Count", command=self.reset_count).pack(side=tk.LEFT, padx=5)
-        
+
         # Status
         status_group = ttk.LabelFrame(control_frame, text="Status", padding=10)
         status_group.pack(side=tk.LEFT)
-        
+
         self.status_label = ttk.Label(status_group, text="Ready - Select a region first")
         self.status_label.pack()
-        
+
         # Content frame
         content_frame = ttk.Frame(main_frame)
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        
+        content_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        content_frame.rowconfigure(0, weight=1)
+        content_frame.columnconfigure(0, weight=3)
+        content_frame.columnconfigure(1, weight=1)
+
         # Video frame
         self.video_frame = ttk.LabelFrame(content_frame, text="Video Feed - Preview Mode", padding=5)
-        self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-        
-        self.canvas = tk.Canvas(self.video_frame, bg='black', width=800, height=600)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-        
+        self.video_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.video_frame.rowconfigure(0, weight=1)
+        self.video_frame.columnconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(self.video_frame, bg='black')
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
         # Instructions
         self.instructions = ttk.Label(self.video_frame, text="1. Select region → 2. Preview will start → 3. Setup line → 4. Start detection", 
                                  font=("Arial", 9))
-        self.instructions.pack(pady=5)
-        
+        self.instructions.grid(row=1, column=0, pady=5, sticky="ew")
+
         # Bind mouse events for line drawing - FIXED: Better event handling
         self.canvas.bind("<Button-1>", self.start_line)
         self.canvas.bind("<B1-Motion>", self.draw_line_preview)
         self.canvas.bind("<ButtonRelease-1>", self.end_line)
-        
+
         # Statistics frame
         stats_frame = ttk.LabelFrame(content_frame, text="Vehicle Statistics", padding=10)
-        stats_frame.pack(side=tk.RIGHT, fill=tk.Y)
-        
+        stats_frame.grid(row=0, column=1, sticky="nsew")
+
         # Count displays
         count_frame = ttk.Frame(stats_frame)
         count_frame.pack(fill=tk.X, pady=10)
-        
+
         self.total_label = ttk.Label(count_frame, text="Total: 0", font=("Arial", 16, "bold"))
         self.total_label.pack(pady=5)
-        
+
         ttk.Separator(count_frame, orient='horizontal').pack(fill=tk.X, pady=10)
-        
+
         self.car_label = ttk.Label(count_frame, text="Cars: 0", font=("Arial", 12))
         self.car_label.pack(pady=2)
-        
+
         self.motorcycle_label = ttk.Label(count_frame, text="Motorcycles: 0", font=("Arial", 12))
         self.motorcycle_label.pack(pady=2)
-        
+
         self.bus_label = ttk.Label(count_frame, text="Buses: 0", font=("Arial", 12))
         self.bus_label.pack(pady=2)
-        
+
         self.truck_label = ttk.Label(count_frame, text="Trucks: 0", font=("Arial", 12))
         self.truck_label.pack(pady=2)
-        
+
         ttk.Separator(count_frame, orient='horizontal').pack(fill=tk.X, pady=10)
-        
+
         # Status indicators
         self.line_status = ttk.Label(count_frame, text="Line: Not drawn", font=("Arial", 10))
         self.line_status.pack(pady=5)
-        
+
         self.region_status = ttk.Label(count_frame, text="Region: Not selected", font=("Arial", 10))
         self.region_status.pack(pady=5)
-        
+
         self.preview_status = ttk.Label(count_frame, text="Preview: Off", font=("Arial", 10))
         self.preview_status.pack(pady=5)
-        
+
         # Real-time info
         info_frame = ttk.LabelFrame(stats_frame, text="Real-time Info", padding=5)
         info_frame.pack(fill=tk.X, pady=10)
-        
+
         self.fps_label = ttk.Label(info_frame, text="FPS: 0", font=("Arial", 9))
         self.fps_label.pack()
-        
+
         self.detection_label = ttk.Label(info_frame, text="Detections: 0", font=("Arial", 9))
         self.detection_label.pack()
-        
+
         # Line info
         line_info_frame = ttk.LabelFrame(stats_frame, text="Line Configuration", padding=5)
         line_info_frame.pack(fill=tk.X, pady=10)
-        
+
         self.line_info_label = ttk.Label(line_info_frame, text="Type: Manual\nColor: Red\nThickness: 3", 
                                          font=("Arial", 8), justify=tk.LEFT)
         self.line_info_label.pack()
-        
+
         # Debug info - FIXED: Added debug info
         debug_frame = ttk.LabelFrame(stats_frame, text="Debug Info", padding=5)
         debug_frame.pack(fill=tk.X, pady=10)
-        
+
         self.debug_label = ttk.Label(debug_frame, text="Draw Mode: Off\nLine Ready: No", 
                                      font=("Arial", 8), justify=tk.LEFT)
         self.debug_label.pack()
@@ -714,26 +724,27 @@ class ScreenVehicleCounter:
         if not self.capture_region:
             messagebox.showwarning("Warning", "Please select a capture region first")
             return
-        
-        # FIXED: Check if line is properly drawn
-        if not self.line_drawn or self.counting_line is None:
-            messagebox.showwarning("Warning", "Please draw a counting line first")
-            return
-            
+
+        if not self.is_capturing:
+            # Akan memulai detection, validasi garis
+            if not self.line_drawn or self.counting_line is None:
+                messagebox.showwarning("Warning", "Please draw a counting line first")
+                return
+
         self.is_capturing = not self.is_capturing
         self.start_button.config(text="Stop Detection" if self.is_capturing else "Start Detection")
-        
+
         if self.is_capturing:
             # Stop preview when starting detection
             if self.is_previewing:
                 self.is_previewing = False
                 self.preview_button.config(text="Start Preview")
                 self.preview_status.config(text="Preview: Off")
-            
+
             # Disable line drawing when detecting
             self.line_draw_enabled = False
             self.draw_line_button.config(text="Draw Line", state='normal')
-            
+
             self.video_frame.config(text="Video Feed - Detection Mode")
             self.status_label.config(text="Detection active - Counting vehicles...")
             self.capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
@@ -744,7 +755,7 @@ class ScreenVehicleCounter:
             # Restart preview automatically
             if self.capture_region:
                 self.root.after(500, lambda: self.toggle_preview() if not self.is_previewing else None)
-        
+
         self.update_debug_info()
     
     def capture_screen(self):
@@ -1035,63 +1046,78 @@ class ScreenVehicleCounter:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, bgr_color, 2)
 
     def start_line(self, event):
-        """Start drawing the line on canvas"""
+        """Start drawing the line on canvas (store canvas coords for preview)"""
         if self.line_draw_enabled:
             self.drawing_line = True
-            # Convert canvas coords to frame coords (relative to capture region)
-            # This is simplified. Proper conversion would need canvas size vs frame size.
-            # Assuming canvas displays actual capture region size
-            self.line_start = (event.x, event.y)
+            self.line_start_canvas = (event.x, event.y)
             self.canvas.delete("temp_line") # Clear any previous temp line
             
     def draw_line_preview(self, event):
-        """Draw a temporary line as user drags"""
-        if self.drawing_line and self.line_start:
+        """Draw a temporary line as user drags (canvas preview only)"""
+        if self.drawing_line and hasattr(self, 'line_start_canvas'):
             self.canvas.delete("temp_line")
-            self.canvas.create_line(self.line_start[0], self.line_start[1], 
+            self.canvas.create_line(self.line_start_canvas[0], self.line_start_canvas[1], 
                                     event.x, event.y, 
                                     fill=self.line_settings['line_color'], 
                                     width=self.line_settings['line_thickness'], 
                                     tags="temp_line")
             
     def end_line(self, event):
-        if self.drawing_line and self.line_start:
+        """End line drawing and set the counting line (convert canvas coords to frame coords)"""
+        if self.drawing_line and hasattr(self, 'line_start_canvas'):
             self.drawing_line = False
-            self.canvas.delete("temp_line")
+            self.canvas.delete("temp_line") # Remove temp line
 
-            # Hitung skala antara canvas dan frame
-            if self.current_frame is None:
-                return
-            frame_h, frame_w = self.current_frame.shape[:2]
-            canvas_w = self.canvas.winfo_width()
-            canvas_h = self.canvas.winfo_height()
-
-            aspect_ratio = frame_w / frame_h
-            canvas_aspect_ratio = canvas_w / canvas_h
-
-            if aspect_ratio > canvas_aspect_ratio:
-                scale = frame_w / canvas_w
-                offset_x = 0
-                offset_y = (canvas_h - (canvas_w / aspect_ratio)) / 2
-            else:
-                scale = frame_h / canvas_h
-                offset_y = 0
-                offset_x = (canvas_w - (canvas_h * aspect_ratio)) / 2
-
-            # Koreksi koordinat dari canvas ke koordinat frame asli
-            def canvas_to_frame(x, y):
-                return int((x - offset_x) * scale), int((y - offset_y) * scale)
-
-            p1_canvas = self.line_start
+            p1_canvas = self.line_start_canvas
             p2_canvas = (event.x, event.y)
 
-            p1_frame = canvas_to_frame(*p1_canvas)
-            p2_frame = canvas_to_frame(*p2_canvas)
+            # Konversi koordinat canvas ke frame asli
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            if self.current_frame is not None:
+                frame_height, frame_width = self.current_frame.shape[:2]
+            else:
+                # fallback ke capture_region
+                frame_width = self.capture_region[2] - self.capture_region[0] if self.capture_region else canvas_width
+                frame_height = self.capture_region[3] - self.capture_region[1] if self.capture_region else canvas_height
 
-            if math.sqrt((p2_frame[0] - p1_frame[0])**2 + (p2_frame[1] - p1_frame[1])**2) > 10:
-                self.counting_line = [p1_frame, p2_frame]
+
+            # Hitung scaling dan offset agar konversi lebih akurat
+            frame_aspect = frame_width / frame_height
+            canvas_aspect = canvas_width / canvas_height
+
+            if frame_aspect > canvas_aspect:
+                # Gambar di canvas penuh lebar, ada padding vertikal
+                scale = canvas_width / frame_width
+                new_height = int(frame_height * scale)
+                y_offset = (canvas_height - new_height) // 2
+                x_offset = 0
+            else:
+                # Gambar di canvas penuh tinggi, ada padding horizontal
+                scale = canvas_height / frame_height
+                new_width = int(frame_width * scale)
+                x_offset = (canvas_width - new_width) // 2
+                y_offset = 0
+
+            def canvas_to_frame(x, y):
+                # Kurangi offset, lalu scaling balik ke frame
+                x_adj = x - x_offset
+                y_adj = y - y_offset
+                x_frame = int(x_adj / scale)
+                y_frame = int(y_adj / scale)
+                # Clamp agar tidak keluar frame
+                x_frame = max(0, min(frame_width - 1, x_frame))
+                y_frame = max(0, min(frame_height - 1, y_frame))
+                return (x_frame, y_frame)
+
+            p1 = canvas_to_frame(*p1_canvas)
+            p2 = canvas_to_frame(*p2_canvas)
+
+            # Ensure a meaningful line is drawn
+            if math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2) > 10: # Minimum length
+                self.counting_line = [p1, p2]
                 self.line_drawn = True
-                self.line_draw_enabled = False
+                self.line_draw_enabled = False # Disable drawing after line is set
                 self.draw_line_button.config(text="Draw Line", state='normal')
                 self.line_status.config(text="Line: Drawn Manually")
                 self.instructions.config(text="Counting line drawn! Ready to start detection.")
@@ -1100,8 +1126,7 @@ class ScreenVehicleCounter:
                 messagebox.showwarning("Warning", "Line too short. Please draw a longer line.")
                 self.line_drawn = False
                 self.line_status.config(text="Line: Not drawn")
-            self.line_start = None
-
+            del self.line_start_canvas
             
     def clear_line(self):
         """Clear the counting line"""
@@ -1116,42 +1141,37 @@ class ScreenVehicleCounter:
                 self.toggle_capture()
 
     def update_display(self):
-        """Update the Tkinter canvas with the current frame"""
+        """Update the Tkinter canvas with the current frame, responsif terhadap resize"""
         if self.current_frame is not None:
-            # Convert OpenCV BGR image to RGB PIL image
             img = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(img)
-            
-            # Resize image to fit canvas while maintaining aspect ratio
+
+            # Ambil ukuran canvas yang terbaru
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
-            
-            if canvas_width == 1 and canvas_height == 1: # Initial state before window is fully rendered
+
+            if canvas_width < 10 or canvas_height < 10:
                 return
 
             img_width, img_height = img.size
-            
             aspect_ratio = img_width / img_height
             canvas_aspect_ratio = canvas_width / canvas_height
-            
+
             if aspect_ratio > canvas_aspect_ratio:
-                # Image is wider than canvas
                 new_width = canvas_width
                 new_height = int(canvas_width / aspect_ratio)
             else:
-                # Image is taller than canvas or aspect ratios are similar
                 new_height = canvas_height
                 new_width = int(canvas_height * aspect_ratio)
-            
+
             img = img.resize((new_width, new_height), Image.LANCZOS)
-            
             self.photo = ImageTk.PhotoImage(image=img)
-            
-            # Clear previous images and draw new one
+
             self.canvas.delete("all")
-            # Center the image on the canvas
-            self.canvas.create_image(canvas_width / 2, canvas_height / 2, 
-                                     image=self.photo, anchor=tk.CENTER)
+            self.canvas.create_image(canvas_width / 2, canvas_height / 2, image=self.photo, anchor=tk.CENTER)
+
+        # Pastikan canvas dan statistik frame selalu mengikuti ukuran window
+        self.root.update_idletasks()
             
 if __name__ == "__main__":
     app = ScreenVehicleCounter()
