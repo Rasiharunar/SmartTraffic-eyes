@@ -1055,19 +1055,43 @@ class ScreenVehicleCounter:
                                     tags="temp_line")
             
     def end_line(self, event):
-        """End line drawing and set the counting line"""
         if self.drawing_line and self.line_start:
             self.drawing_line = False
-            self.canvas.delete("temp_line") # Remove temp line
-            
-            p1 = self.line_start
-            p2 = (event.x, event.y)
-            
-            # Ensure a meaningful line is drawn
-            if math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2) > 10: # Minimum length
-                self.counting_line = [p1, p2]
+            self.canvas.delete("temp_line")
+
+            # Hitung skala antara canvas dan frame
+            if self.current_frame is None:
+                return
+            frame_h, frame_w = self.current_frame.shape[:2]
+            canvas_w = self.canvas.winfo_width()
+            canvas_h = self.canvas.winfo_height()
+
+            aspect_ratio = frame_w / frame_h
+            canvas_aspect_ratio = canvas_w / canvas_h
+
+            if aspect_ratio > canvas_aspect_ratio:
+                scale = frame_w / canvas_w
+                offset_x = 0
+                offset_y = (canvas_h - (canvas_w / aspect_ratio)) / 2
+            else:
+                scale = frame_h / canvas_h
+                offset_y = 0
+                offset_x = (canvas_w - (canvas_h * aspect_ratio)) / 2
+
+            # Koreksi koordinat dari canvas ke koordinat frame asli
+            def canvas_to_frame(x, y):
+                return int((x - offset_x) * scale), int((y - offset_y) * scale)
+
+            p1_canvas = self.line_start
+            p2_canvas = (event.x, event.y)
+
+            p1_frame = canvas_to_frame(*p1_canvas)
+            p2_frame = canvas_to_frame(*p2_canvas)
+
+            if math.sqrt((p2_frame[0] - p1_frame[0])**2 + (p2_frame[1] - p1_frame[1])**2) > 10:
+                self.counting_line = [p1_frame, p2_frame]
                 self.line_drawn = True
-                self.line_draw_enabled = False # Disable drawing after line is set
+                self.line_draw_enabled = False
                 self.draw_line_button.config(text="Draw Line", state='normal')
                 self.line_status.config(text="Line: Drawn Manually")
                 self.instructions.config(text="Counting line drawn! Ready to start detection.")
@@ -1077,6 +1101,7 @@ class ScreenVehicleCounter:
                 self.line_drawn = False
                 self.line_status.config(text="Line: Not drawn")
             self.line_start = None
+
             
     def clear_line(self):
         """Clear the counting line"""
