@@ -269,11 +269,11 @@ class ScreenVehicleCounter:
             # --- KONFIGURASI DATABASE POSTGRESQL ---
             # Ganti dengan detail koneksi PostgreSQL Anda
             self.db_conn = psycopg2.connect(
-                dbname="smarttraffic",   
-                user="postgres",      
-                password="12345678",  
-                host="localhost",         
-                port="5432"   # default 5432
+                dbname="person_counter",   
+                user="magang",      
+                password="magang123#",  
+                host="10.98.33.122",         
+                port="5433"  # default 5432
             )
             self.cursor = self.db_conn.cursor()
             self.cursor.execute('''
